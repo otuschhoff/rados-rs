@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-09-16T16:42:12Z",
+  "commands": [
+    {
+      "argv": [
+        "rustc",
+        "-Vv"
+      ],
+      "exit_code": 0,
+      "output": "rustc 1.98.0 (88d9e12ae 2026-08-18)\nbinary: rustc\ncommit-hash: 88d9e12ae178fab0fb5cc050a94da85685d449ea\ncommit-date: 2026-08-18\nhost: aarch64-apple-darwin\nrelease: 1.98.0\nLLVM version: 22.1.8\n",
+      "output_sha256": "bd38eb565e393486255b35ff1f74e9dc7ca87425f1febb798b9dd042159a833a"
+    },
+    {
+      "argv": [
+        "cargo",
+        "-V"
+      ],
+      "exit_code": 0,
+      "output": "cargo 1.98.0 (797e8a9bc 2026-08-05)\n",
+      "output_sha256": "fb3f25aefd6d5441842d285f5a9b125b3f0f0b0bf2013d9a32677f9e99c6c854"
+    },
+    {
+      "argv": [
+        "rustup",
+        "show"
+      ],
+      "exit_code": 0,
+      "output": "Default host: aarch64-apple-darwin\nrustup home:  /Users/oli/.rustup\n\ninstalled toolchains\n--------------------\nstable-aarch64-apple-darwin (active, default)\n\nactive toolchain\n----------------\nname: stable-aarch64-apple-darwin\nactive because: it's the default toolchain\ninstalled targets:\n  aarch64-apple-darwin\n  aarch64-unknown-linux-musl\n  x86_64-apple-darwin\n  x86_64-pc-windows-msvc\n  x86_64-unknown-linux-gnu\n  x86_64-unknown-linux-musl\n",
+      "output_sha256": "9aa76948eaef833d3466d6f4985b557f0f8d647944a7f8400ec6034465d124a5"
+    },
+    {
+      "argv": [
+        "go",
+        "version"
+      ],
+      "exit_code": 0,
+      "output": "go version go1.27.1 darwin/arm64\n",
+      "output_sha256": "c528ba02b39880f1357f51dee70e41c1ef03e3a70c7a03055c080532b9635f58"
+    },
+    {
+      "argv": [
+        "docker",
+        "version",
+        "--format",
+        "{{.Server.Version}}"
+      ],
+      "exit_code": 0,
+      "output": "29.4.0\n",
+      "output_sha256": "9956124da49d648c51629047eb3514de993a6df9978a23ad469199d892ef752d"
+    },
+    {
+      "argv": [
+        "docker",
+        "info",
+        "--format",
+        "{{json .NCPU}} {{json .MemTotal}}"
+      ],
+      "exit_code": 0,
+      "output": "10 16819609600\n",
+      "output_sha256": "972d020197976919c3a697019f44ca736d12884bf1df32e7cec70d4c27ac51f0"
+    },
+    {
+      "argv": [
+        "df",
+        "-h",
+        "/Users/oli/proj/rados-rs"
+      ],
+      "exit_code": 0,
+      "output": "Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on\n/dev/disk3s5   926Gi   805Gi    96Gi    90%    5.5M  1.0G    1%   /System/Volumes/Data\n",
+      "output_sha256": "935d1689e2e09ab4d3d7402e753e7911e152969aacc39c16b6f85bd145de10a4"
+    },
+    {
+      "argv": [
+        "gh",
+        "api",
+        "repos/ceph/ceph/git/commits/69f84cc2651aa259a15bc192ddaabd3baba07489",
+        "--jq",
+        ".sha"
+      ],
+      "exit_code": 0,
+      "output": "69f84cc2651aa259a15bc192ddaabd3baba07489\n",
+      "output_sha256": "571f96bf387967fa712f9789c28c41fb6b6b4fa71af2e80c21affaf6bf11d40a"
+    },
+    {
+      "argv": [
+        "gh",
+        "api",
+        "repos/ceph/ceph/git/commits/7f793731f1b39eb4f465e960113d2363c311b964",
+        "--jq",
+        ".sha"
+      ],
+      "exit_code": 0,
+      "output": "7f793731f1b39eb4f465e960113d2363c311b964\n",
+      "output_sha256": "69ee75cec1a25728965cfeb6e990595cd4d632d186bf15eb9e80b0430c203ef5"
+    },
+    {
+      "argv": [
+        "docker",
+        "buildx",
+        "imagetools",
+        "inspect",
+        "quay.io/ceph/ceph@sha256:1228c3d05e45fbc068a8c33614e4409b6dac688bcc77369b06009b5830fa8d86",
+        "--raw"
+      ],
+      "exit_code": 0,
+      "output": "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:4c65c801a8e5e5704934118b2c723e7233f2b5de8552bfc8f129dabe1fced0b1\",\"size\":834,\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"}},{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:b6b80a4709abafffbb670baecaa4df693b6ef20c203293f1721c7a209d36a5ba\",\"size\":834,\"platform\":{\"architecture\":\"arm64\",\"os\":\"linux\",\"variant\":\"v8\"}}]}",
+      "output_sha256": "1228c3d05e45fbc068a8c33614e4409b6dac688bcc77369b06009b5830fa8d86"
+    },
+    {
+      "argv": [
+        "docker",
+        "buildx",
+        "imagetools",
+        "inspect",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "--raw"
+      ],
+      "exit_code": 0,
+      "output": "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:09ee90f6f3e0c7b9954f71d214ee05e9bbaaaea3716b1dd619603283b829f8b8\",\"size\":834,\"platform\":{\"architecture\":\"amd64\",\"os\":\"linux\"}},{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa\",\"size\":834,\"platform\":{\"architecture\":\"arm64\",\"os\":\"linux\",\"variant\":\"v8\"}}]}",
+      "output_sha256": "6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+    }
+  ],
+  "crates": [
+    {
+      "name": "rados-rs",
+      "url": "https://crates.io/api/v1/crates/rados-rs",
+      "error": "extra arguments"
+    },
+    {
+      "name": "tokio",
+      "url": "https://crates.io/api/v1/crates/tokio",
+      "error": "extra arguments"
+    },
+    {
+      "name": "bytes",
+      "url": "https://crates.io/api/v1/crates/bytes",
+      "error": "extra arguments"
+    },
+    {
+      "name": "thiserror",
+      "url": "https://crates.io/api/v1/crates/thiserror",
+      "error": "extra arguments"
+    },
+    {
+      "name": "aes",
+      "url": "https://crates.io/api/v1/crates/aes",
+      "error": "extra arguments"
+    },
+    {
+      "name": "aes-gcm",
+      "url": "https://crates.io/api/v1/crates/aes-gcm",
+      "error": "extra arguments"
+    },
+    {
+      "name": "cbc",
+      "url": "https://crates.io/api/v1/crates/cbc",
+      "error": "extra arguments"
+    },
+    {
+      "name": "hmac",
+      "url": "https://crates.io/api/v1/crates/hmac",
+      "error": "extra arguments"
+    },
+    {
+      "name": "sha2",
+      "url": "https://crates.io/api/v1/crates/sha2",
+      "error": "extra arguments"
+    },
+    {
+      "name": "zeroize",
+      "url": "https://crates.io/api/v1/crates/zeroize",
+      "error": "extra arguments"
+    },
+    {
+      "name": "secrecy",
+      "url": "https://crates.io/api/v1/crates/secrecy",
+      "error": "extra arguments"
+    },
+    {
+      "name": "getrandom",
+      "url": "https://crates.io/api/v1/crates/getrandom",
+      "error": "extra arguments"
+    },
+    {
+      "name": "serde",
+      "url": "https://crates.io/api/v1/crates/serde",
+      "error": "extra arguments"
+    },
+    {
+      "name": "serde_json",
+      "url": "https://crates.io/api/v1/crates/serde_json",
+      "error": "extra arguments"
+    },
+    {
+      "name": "base64",
+      "url": "https://crates.io/api/v1/crates/base64",
+      "error": "extra arguments"
+    },
+    {
+      "name": "tracing",
+      "url": "https://crates.io/api/v1/crates/tracing",
+      "error": "extra arguments"
+    },
+    {
+      "name": "kerberos_crypto",
+      "url": "https://crates.io/api/v1/crates/kerberos_crypto",
+      "error": "extra arguments"
+    }
+  ],
+  "completed_at": "2026-09-16T16:42:16Z"
+}

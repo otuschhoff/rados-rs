@@ -1,0 +1,499 @@
+[
+  {
+    "source_path": "LICENSE",
+    "destination": "LICENSE",
+    "sha256": "10d2b9ae287146e3523195935cd9e2b79658acb32a73e974d8072cfbd1e34f43",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "SECURITY.md",
+    "destination": "reference/go/SECURITY.md",
+    "sha256": "d171704b82e2557c0ad55f41505d4cf92307113550448a7b1ca245a8965f4768",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "THIRD_PARTY_NOTICES",
+    "destination": "THIRD_PARTY_NOTICES",
+    "sha256": "a7ac5541cfe375e30830ab02ab2fc6f4e8f359d0d970972a8eeeaaf828b870c1",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/RUST_PORT_SPEC.md",
+    "destination": "reference/go/docs/RUST_PORT_SPEC.md",
+    "sha256": "0b2cd2227a7ce5514b95dde539ab5656e5cda1161df29ad6a145944d886fd7fd",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/README.md",
+    "destination": "reference/go/docs/p00/README.md",
+    "sha256": "59862ae3980f1ec793af7282d8048e2f5741cbf8ef71f526302899816f355eda",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/api-inventory.csv",
+    "destination": "reference/go/docs/p00/api-inventory.csv",
+    "sha256": "fc73c6b8f7cc63699a0e9e135342cf474c679d7577677ad858cb5a72118f623a",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/compatibility.md",
+    "destination": "reference/go/docs/p00/compatibility.md",
+    "sha256": "e0cb5d107e576d5f775ecbf2c71b24f31a754cc1294e9b7611d79182ad1da61c",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/evidence.json",
+    "destination": "reference/go/docs/p00/evidence.json",
+    "sha256": "299c79401068f7c20fafb1d74a244add3a298febc38df4ec0e8648ed3824a64c",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/licensing.md",
+    "destination": "reference/go/docs/p00/licensing.md",
+    "sha256": "f67d0067c7ee339d2901a4bc1f15e45571c396b25d9d5352636611b838719cb7",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/protocol-sources.md",
+    "destination": "reference/go/docs/p00/protocol-sources.md",
+    "sha256": "2826b7096405cfaea4eee8d3bad288609c1569890948f2c641d2c25fcc5dc4bd",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/task-handoff.md",
+    "destination": "reference/go/docs/p00/task-handoff.md",
+    "sha256": "f4a885f5be4e1cee03b3f13115466a32ad6d7802bfdc3cbafc2656d908b3f570",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/tasks.md",
+    "destination": "reference/go/docs/p00/tasks.md",
+    "sha256": "c3dc1cd508c78bd2abef52e4ced7b319071e1b4b6e8df97fe6f3f887ed6db401",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p00/threat-model.md",
+    "destination": "reference/go/docs/p00/threat-model.md",
+    "sha256": "aefd2db97776f846109303d0c89b9ccd418efb8170574e69f5f915c4e37bbd65",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/README.md",
+    "destination": "reference/go/docs/p01/README.md",
+    "sha256": "dafc588922ec8607126488995f8762c84fa7632c6195a70779c4aa347e38607b",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/api-contract.md",
+    "destination": "reference/go/docs/p01/api-contract.md",
+    "sha256": "e5739a1bd7581fa8efb23b13c87f592a89c9344b7e7685a6bd66f24ac65faddf",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/evidence.json",
+    "destination": "reference/go/docs/p01/evidence.json",
+    "sha256": "ea6f7350cc265dc23027aafbfac4a9a1d6d83a12aac8dfa995fe56dc88e040c9",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/provenance.md",
+    "destination": "reference/go/docs/p01/provenance.md",
+    "sha256": "c2efa9b2472b4b34ef451b5e9d7fa0ac6ef53bbee83303b5c136f6b6f0ad37bc",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/public-api.md",
+    "destination": "reference/go/docs/p01/public-api.md",
+    "sha256": "c723b142fe3bc5c82f82c5f90f579ffe59e4cc365f4626fb70846bbd25327cf0",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/task-handoff.md",
+    "destination": "reference/go/docs/p01/task-handoff.md",
+    "sha256": "a1d1a97589df6401c77e2df884972806970e8eae04c55ed63b1434ad95e6fa60",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p01/tasks.md",
+    "destination": "reference/go/docs/p01/tasks.md",
+    "sha256": "b557f786d2d5fd8e00568e75c8b92e47d968df349e92baa89e42d45e01845cc1",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p03/README.md",
+    "destination": "reference/go/docs/p03/README.md",
+    "sha256": "05fae4acbd8c607aca9b0f424db62a3f9850c7bf9abf0dfa08eca22f81430a83",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p04/configuration.md",
+    "destination": "reference/go/docs/p04/configuration.md",
+    "sha256": "bd9ff264efc871469ac4c0b3c4bd31edd2b3142e136c48117f764b7cc6d6f81e",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p12/api-coverage.md",
+    "destination": "reference/go/docs/p12/api-coverage.md",
+    "sha256": "b50450fc2eeeb6da4a023607b2ea09bc70129d10cf28f906068049015b4c2c6f",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p12/dependencies.md",
+    "destination": "reference/go/docs/p12/dependencies.md",
+    "sha256": "2422d446964119fc30abe3cf09ad4764055ac2dd5fdafb1ad99def83eb817762",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "docs/p12/human-review.md",
+    "destination": "reference/go/docs/p12/human-review.md",
+    "sha256": "cb812da44997020e7a286b546c51c171db6bc01a2f73c92835380c045db732ba",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "go.mod",
+    "destination": "reference/go/go.mod",
+    "sha256": "2b65739ae80b83e64d1dfbd07684b2967a745d19be61b4e8e546182262d2a4a7",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "go.sum",
+    "destination": "reference/go/go.sum",
+    "sha256": "aada9d87cdf1fc9761055ae34522bdc35421d952dcc19d6f5323dd2dc087333c",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/README.md",
+    "destination": "reference/go/integration/README.md",
+    "sha256": "e6d640ca6572d4516acaac89b0d4af5eb08d09e51b866dedd91646c0e9e44d6f",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p00/oracle/Dockerfile",
+    "destination": "reference/go/integration/p00/oracle/Dockerfile",
+    "sha256": "8771c2758a7d994db357b96d0a845bb1e919d3acaf846908e425565c31dc186d",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p00/oracle/centos-stream.repo",
+    "destination": "reference/go/integration/p00/oracle/centos-stream.repo",
+    "sha256": "83240f736d211998dd5bbb89773696b9e11463d24dac6eeb8eb93125d4540d3b",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p00/oracle/main.cc",
+    "destination": "reference/go/integration/p00/oracle/main.cc",
+    "sha256": "bfccf6b3593ce6abc83ac639f8d8430b18ee9c9e21bda0831e468f5d54cba1e3",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p01/reproduce.sh",
+    "destination": "reference/go/integration/p01/reproduce.sh",
+    "sha256": "e7f23e66a19321227877b3722a7f59a542682f4a5c42b6dbdffe405bed99f8d4",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p12/report.schema.json",
+    "destination": "reference/go/integration/p12/report.schema.json",
+    "sha256": "17f39c7c95e76719b9da8a585463be2893b9a6552747a3e12505da59e348ca9b",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "integration/p12/reproduce.sh",
+    "destination": "reference/go/integration/p12/reproduce.sh",
+    "sha256": "34ab26fe6daf7a0a0c1ecde88568fec5f9f3560d03d8b8036f9e9b911266cf33",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/cephx/connector.go",
+    "destination": "reference/go/internal/cephx/connector.go",
+    "sha256": "9dc87f5a834fda86bbe51808d795423c1cdb85cb79608ece8a3845118ea12b61",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/cephx/core.go",
+    "destination": "reference/go/internal/cephx/core.go",
+    "sha256": "04021d27aa9845683decb8ad9558af311ee7e12c86fe70d68e9d522eacc9a49f",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/cephx/service_connector.go",
+    "destination": "reference/go/internal/cephx/service_connector.go",
+    "sha256": "3f2267975a819905fa3c6e9ba283e00f5e0f23d93a224cb4568526eb1ac287b6",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/crush/ln.go",
+    "destination": "reference/go/internal/crush/ln.go",
+    "sha256": "c06d4879ed78ea648a89cd8763bbd6b0a8bb773572d6359d78c54701b8c104b7",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/crush/place.go",
+    "destination": "reference/go/internal/crush/place.go",
+    "sha256": "6637777ca25ad08a363ee0fde11214717086b887b3ef66fa5e23730734ac9ea3",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/encoding/codec.go",
+    "destination": "reference/go/internal/encoding/codec.go",
+    "sha256": "6352b11ed23db97a34bd63f33b272caf162b69cad2da7b9accd51e05f3c6068d",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/encoding/codec_test.go",
+    "destination": "reference/go/internal/encoding/codec_test.go",
+    "sha256": "ac3316834d1f0bb1bb2633f5c777c70b082f55bd3a14057f5e14772039cbcfc5",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/maps/placement.go",
+    "destination": "reference/go/internal/maps/placement.go",
+    "sha256": "833bbea840dd666d69b5a31527d7732a80cfb2f26d6acd59da26af258e8b6801",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/msgr/frame.go",
+    "destination": "reference/go/internal/msgr/frame.go",
+    "sha256": "99b3062c65a50573a4b53f6bd889570506630a2813a0329dc3093dae27f32999",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/msgr/secure.go",
+    "destination": "reference/go/internal/msgr/secure.go",
+    "sha256": "ebb73db8d335c428322c2353138ad5d37fc490f8039b3e0c553ae5b2642f7761",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/msgr/session.go",
+    "destination": "reference/go/internal/msgr/session.go",
+    "sha256": "aca9cbe088442ed6d2406639fe4dd70ca8473d3f2c3e9064fce05e1d634f0a61",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/msgr/transport.go",
+    "destination": "reference/go/internal/msgr/transport.go",
+    "sha256": "72117d4104ed08c4200e1e2270f0e1fced17dd6311b96f33544395b07157a34b",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/objecter/client.go",
+    "destination": "reference/go/internal/objecter/client.go",
+    "sha256": "1d2041912b023a4919f56f55dd78736d1a542ceac5c6f946bfdf5b7da01c64ea",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/objecter/mutation.go",
+    "destination": "reference/go/internal/objecter/mutation.go",
+    "sha256": "70bc91eff11cea57dab03f6490a9af380cdcc431c851295c7e279392e70a86d7",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/objecter/osd_session.go",
+    "destination": "reference/go/internal/objecter/osd_session.go",
+    "sha256": "872d1d9387bdac053a0aa4aef6b88791e0c8396ca3216fcb6ea9ca1e3e15e462",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/osd/messages.go",
+    "destination": "reference/go/internal/osd/messages.go",
+    "sha256": "ddc2112402d83aa5c27707c13ae73836e14291fc13a1163d922988e06af79e5c",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/p12qualcontract/contract.go",
+    "destination": "reference/go/internal/p12qualcontract/contract.go",
+    "sha256": "9c9e390dab15c2d9f52a038531eb9b6bf4bd3f492e1192b0074ba7f9ca81c149",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/protocol/address.go",
+    "destination": "reference/go/internal/protocol/address.go",
+    "sha256": "2065472ed7d6dfb1546e40a58ef31e6441f8e5f447f1aeaa7f5808bcfbaf4af4",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "internal/protocol/protocol_test.go",
+    "destination": "reference/go/internal/protocol/protocol_test.go",
+    "sha256": "fb31e88e50b26a76c3d29a9af375a64f97c44f0989952d57de6dd73a7755a358",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/README.md",
+    "destination": "testdata/README.md",
+    "sha256": "589d1ba5b2e046f7f414fbc62632fbec4148a2102553bc35273c95b86129cec1",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/manifest.schema.json",
+    "destination": "testdata/manifest.schema.json",
+    "sha256": "c6c0c0d55e1fb73006bac1c0cc44a95541c455007f0b39cdd55f0cd16cdb7a3e",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv4-legacy.bin",
+    "destination": "testdata/p01/entity-addr-ipv4-legacy.bin",
+    "sha256": "3e0124654f5817281cfaa1b056f14b4128b546ef38994d765b6bb09c00868fbf",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv4-legacy.bin.json",
+    "destination": "testdata/p01/entity-addr-ipv4-legacy.bin.json",
+    "sha256": "0005ecb888beba6b13833e1edb32fc5851e59b1fd1f73b3e9b48ff956a14e00b",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv4-modern.bin",
+    "destination": "testdata/p01/entity-addr-ipv4-modern.bin",
+    "sha256": "43c8ed879a7fd14a2d86ac42f0d78d9ae6d5a785f5e60b6658bcba3b3eb2d7e7",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv4-modern.bin.json",
+    "destination": "testdata/p01/entity-addr-ipv4-modern.bin.json",
+    "sha256": "6085d858d521847cadf63c24e0c31aaf9f07b3d68fde5b43004838ab29890538",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv6-modern.bin",
+    "destination": "testdata/p01/entity-addr-ipv6-modern.bin",
+    "sha256": "a5b18e8166e8aa1d0c3285a6c1a3470851ae2bd229b28da857328c3bd2217986",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addr-ipv6-modern.bin.json",
+    "destination": "testdata/p01/entity-addr-ipv6-modern.bin.json",
+    "sha256": "a822dda3fe0cfdb90c4b140c29c2f5a0c7c6bcf2ae00c3a3171d93c94bbfb43d",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addrvec-modern.bin",
+    "destination": "testdata/p01/entity-addrvec-modern.bin",
+    "sha256": "f26c6ce30fe8892264a14b6cd5042549d1eee314f921cf8019faf6be9d5c4345",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-addrvec-modern.bin.json",
+    "destination": "testdata/p01/entity-addrvec-modern.bin.json",
+    "sha256": "7e368d4af8a02c2a417670d0ff8e2813c2d95ae5fe05750e8d61e0fd45cfc7d8",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-name-client-1.bin",
+    "destination": "testdata/p01/entity-name-client-1.bin",
+    "sha256": "0ea9e19802a23c4674e289fabeaa6e600262fb9ad25ae64fd4fb927651b6abe9",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-name-client-1.bin.json",
+    "destination": "testdata/p01/entity-name-client-1.bin.json",
+    "sha256": "910701f79ad25552ebdb61e3c4abac8103f3eee2a09a4f5b195d73120da98631",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-name-mon-new.bin",
+    "destination": "testdata/p01/entity-name-mon-new.bin",
+    "sha256": "1272f520cf7ca5cf117a0b5a3116518371bf20fb7fac043ac1be568b8c55b96c",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "testdata/p01/entity-name-mon-new.bin.json",
+    "destination": "testdata/p01/entity-name-mon-new.bin.json",
+    "sha256": "d2dad2e8d97cfcd80d880895300b6ef4c22f21e1aa10917556608044a1e61870",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "tools/api-inventory/main.go",
+    "destination": "reference/go/tools/api-inventory/main.go",
+    "sha256": "79f4f2be6abd36f655960a2b61637feee7a9f47e4f4a8c264a39b2d099dbf6a5",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "tools/p01-verify/main.go",
+    "destination": "reference/go/tools/p01-verify/main.go",
+    "sha256": "bf7c9e91416b8e2af8c3d9cc6426b5109c584e8e5dad490620af53d714b9db40",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "tools/p12-qualify/main.go",
+    "destination": "reference/go/tools/p12-qualify/main.go",
+    "sha256": "6cbb260184ac4cf26ec8189ea938e2ba969d6af322c3577ba7799992c35529b2",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
+    "source_path": "tools/p12-verify/review_signature_test.go",
+    "destination": "reference/go/tools/p12-verify/review_signature_test.go",
+    "sha256": "ff286fc0292f8ffbf7b2434a11bae95dc95939c506bab0809557875fe20dc3c4",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  }
+]

@@ -1,0 +1,28 @@
+go-librados third-party notices
+================================
+
+This distribution's Go module graph includes the following packages. The
+copyright and license terms remain those of their respective authors.
+
+github.com/otuschhoff/gokrb5/v8 v8.5.3
+  License: Apache-2.0
+  Copyright: gokrb5 contributors
+  Source: https://github.com/otuschhoff/gokrb5
+
+github.com/jcmturner/aescts/v2 v2.0.0
+  License: Apache-2.0
+  Copyright: Jonathan Turner and contributors
+  Source: https://github.com/jcmturner/aescts
+
+github.com/jcmturner/gofork v1.7.6
+  License: BSD-3-Clause
+  Copyright: The Go Authors and gofork contributors
+  Source: https://github.com/jcmturner/gofork
+
+golang.org/x/crypto v0.56.0
+  License: BSD-3-Clause
+  Copyright: The Go Authors
+  Source: https://go.googlesource.com/crypto
+
+Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+BSD 3-Clause License: https://opensource.org/license/bsd-3-clause

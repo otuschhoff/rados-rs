@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "resource_sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elapsed_ns", "rss_bytes", "goroutines", "heap_bytes", "inflight"],
+      "properties": {
+        "elapsed_ns": {"type": "integer", "minimum": 0},
+        "rss_bytes": {"type": "integer", "minimum": 1},
+        "goroutines": {"type": "integer", "minimum": 1},
+        "heap_bytes": {"type": "integer", "minimum": 1},
+        "inflight": {"type": "null"}
+      }
+    },
+    "credential_renewal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "service_id", "session_id", "due_generation", "completed_generation", "due_at", "completed_at"],
+      "properties": {
+        "service": {"enum": ["monitor", "osd"]},
+        "service_id": {"type": "integer", "minimum": 0},
+        "session_id": {"type": "integer", "minimum": 1},
+        "due_generation": {"type": "integer", "minimum": 1},
+        "completed_generation": {"type": "integer", "minimum": 2},
+        "due_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transport",
+        "requested_duration_ns",
+        "elapsed_ns",
+        "monotonic_duration_satisfied",
+        "operations",
+        "writes",
+        "append_once_verifications",
+        "duplicate_mutations_detected",
+        "reads",
+        "stats",
+        "removes",
+        "reconnects",
+        "longest_connection_ns",
+        "credential_renewals",
+        "samples",
+        "inflight_measurement",
+        "maximum_configured_sample_count"
+      ],
+      "properties": {
+        "transport": {"enum": ["secure", "crc"]},
+        "requested_duration_ns": {"type": "integer", "minimum": 1},
+        "elapsed_ns": {"type": "integer", "minimum": 1},
+        "monotonic_duration_satisfied": {"const": true},
+        "operations": {"type": "integer", "minimum": 1},
+        "writes": {"type": "integer", "minimum": 1},
+        "append_once_verifications": {"type": "integer", "minimum": 1},
+        "duplicate_mutations_detected": {"const": 0},
+        "reads": {"type": "integer", "minimum": 1},
+        "stats": {"type": "integer", "minimum": 1},
+        "removes": {"type": "integer", "minimum": 1},
+        "reconnects": {"type": "integer", "minimum": 0},
+        "longest_connection_ns": {"type": "integer", "minimum": 1},
+        "credential_renewals": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/credential_renewal"},
+          "allOf": [
+            {"contains": {"type": "object", "properties": {"service": {"const": "monitor"}}, "required": ["service"]}},
+            {"contains": {"type": "object", "properties": {"service": {"const": "osd"}}, "required": ["service"]}}
+          ]
+        },
+        "samples": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2000,
+          "items": {"$ref": "#/$defs/resource_sample"}
+        },
+        "inflight_measurement": {
+          "const": "unavailable through the public API; reported as null"
+        },
+        "maximum_configured_sample_count": {"type": "integer", "minimum": 2, "maximum": 2000}
+      }
+    },
+    "benchmark_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "transport", "environment", "resources", "rows"],
+      "properties": {
+        "implementation": {"enum": ["go", "native"]},
+        "transport": {"enum": ["secure", "crc"]},
+        "environment": {"type": "object", "minProperties": 1},
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu_user_ns", "cpu_system_ns", "allocations", "allocated_bytes", "max_rss_bytes"],
+          "properties": {
+            "cpu_user_ns": {"type": "integer", "minimum": 0},
+            "cpu_system_ns": {"type": "integer", "minimum": 0},
+            "allocations": {"type": ["integer", "null"], "minimum": 0},
+            "allocated_bytes": {"type": ["integer", "null"], "minimum": 0},
+            "max_rss_bytes": {"type": "integer", "minimum": 1}
+          }
+        },
+        "rows": {
+          "type": "array",
+          "minItems": 36,
+          "maxItems": 36,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["size_bytes", "concurrency", "workload", "operations", "bytes", "elapsed_ns", "throughput_bytes_per_second", "iops", "p50_ns", "p95_ns", "p99_ns"],
+            "properties": {
+              "size_bytes": {"enum": [4096, 65536, 1048576, 4194304]},
+              "concurrency": {"enum": [1, 16, 64]},
+              "workload": {"enum": ["read", "write", "mixed"]},
+              "operations": {"type": "integer", "minimum": 1},
+              "bytes": {"type": "integer", "minimum": 1},
+              "elapsed_ns": {"type": "integer", "minimum": 1},
+              "throughput_bytes_per_second": {"type": "number", "exclusiveMinimum": 0},
+              "iops": {"type": "number", "exclusiveMinimum": 0},
+              "p50_ns": {"type": "integer", "minimum": 0},
+              "p95_ns": {"type": "integer", "minimum": 0},
+              "p99_ns": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "command", "started_at", "finished_at", "qualification", "fuzz", "reviews", "source", "server", "cluster", "probe", "churn", "benchmark", "release"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"enum": ["candidate", "non-certifying"]},
+    "command": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "finished_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "qualification": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "status", "sha256"],
+          "properties": {
+            "path": {"const": "docs/p12/qualification-report.json"},
+            "status": {"const": "passed"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "fuzz": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "status", "profile", "sha256"],
+          "properties": {
+            "path": {"const": "docs/p12/fuzz-report.json"},
+            "status": {"const": "passed"},
+            "profile": {"const": "certifying"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      ]
+    },
+    "reviews": {"type": "null"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "identity", "artifacts"],
+      "properties": {
+        "repository": {"const": "https://github.com/otuschhoff/go-librados.git"},
+        "identity": {"const": "content-addressed-artifacts"},
+        "artifacts": {
+          "type": "object",
+          "minProperties": 100,
+          "additionalProperties": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "source_anchor_commit", "version", "image", "platform", "binaries"],
+      "properties": {
+        "repository": {"const": "https://github.com/ceph/ceph.git"},
+        "source_anchor_commit": {"const": "7f793731f1b39eb4f465e960113d2363c311b964"},
+        "version": {"const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"},
+        "image": {"type": "string", "pattern": "^quay\\.io/ceph/ceph@sha256:[0-9a-f]{64}$"},
+        "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+        "binaries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mon_sha256", "osd_sha256"],
+          "properties": {
+            "mon_sha256": {"$ref": "#/$defs/sha256"},
+            "osd_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fsid", "network", "monitors", "osds", "pool", "external_defaults", "service_ticket_ttl_seconds", "transports"],
+      "properties": {
+        "fsid": {"const": "31111111-2222-4333-8444-121212121212"},
+        "network": {"const": "172.30.112.0/24"},
+        "monitors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [{"const": "v2:172.30.112.10:3300"}],
+          "items": false
+        },
+        "osds": {"const": 3},
+        "pool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "size", "min_size", "pg_num"],
+          "properties": {
+            "name": {"const": "p12-data"},
+            "size": {"const": 2},
+            "min_size": {"const": 1},
+            "pg_num": {"const": 16}
+          }
+        },
+        "external_defaults": {"const": false},
+        "service_ticket_ttl_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+        "transports": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [{"const": "secure"}, {"const": "crc"}],
+          "items": false
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secure", "crc"],
+      "properties": {
+        "secure": {"$ref": "#/$defs/probe"},
+        "crc": {"$ref": "#/$defs/probe"}
+      }
+    },
+    "churn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["monitor_restarts", "monitor_recoveries", "osd_restarts", "osd_recoveries", "final_osd_stat", "final_health"],
+      "properties": {
+        "monitor_restarts": {"type": "integer", "minimum": 0},
+        "monitor_recoveries": {"type": "integer", "minimum": 0},
+        "osd_restarts": {"type": "integer", "minimum": 0},
+        "osd_recoveries": {"type": "integer", "minimum": 0},
+        "final_osd_stat": {"type": "object"},
+        "final_health": {"type": "object"}
+      }
+    },
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "runs"],
+      "properties": {
+        "performed": {"type": "boolean"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/benchmark_run"}}
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["performed", "version", "path", "reproducible", "artifacts"],
+      "properties": {
+        "performed": {"type": "boolean"},
+        "version": {"type": ["string", "null"]},
+        "path": {"type": ["string", "null"]},
+        "reproducible": {"type": "boolean"},
+        "artifacts": {
+          "type": "object",
+          "maxProperties": 4,
+          "additionalProperties": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "candidate"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "command": {"const": "./integration/p12/reproduce.sh"},
+          "qualification": {"type": "object"},
+          "fuzz": {"type": "object"},
+          "reviews": {"type": "null"},
+          "probe": {
+            "type": "object",
+            "properties": {
+              "secure": {
+                "type": "object",
+                "properties": {
+                  "transport": {"const": "secure"},
+                  "requested_duration_ns": {"type": "integer", "minimum": 86400000000000},
+                  "elapsed_ns": {"type": "integer", "minimum": 86400000000000},
+                  "reconnects": {"type": "integer", "minimum": 24},
+                  "longest_connection_ns": {"type": "integer", "exclusiveMinimum": 900000000000}
+                }
+              },
+              "crc": {
+                "type": "object",
+                "properties": {
+                  "transport": {"const": "crc"},
+                  "requested_duration_ns": {"type": "integer", "minimum": 86400000000000},
+                  "elapsed_ns": {"type": "integer", "minimum": 86400000000000},
+                  "reconnects": {"type": "integer", "minimum": 24},
+                  "longest_connection_ns": {"type": "integer", "exclusiveMinimum": 900000000000}
+                }
+              }
+            }
+          },
+          "churn": {
+            "type": "object",
+            "properties": {
+              "monitor_restarts": {"type": "integer", "minimum": 1},
+              "monitor_recoveries": {"type": "integer", "minimum": 1},
+              "osd_restarts": {"type": "integer", "minimum": 1},
+              "osd_recoveries": {"type": "integer", "minimum": 1}
+            }
+          },
+          "benchmark": {
+            "type": "object",
+            "properties": {
+              "performed": {"const": true},
+              "runs": {"type": "array", "minItems": 4, "maxItems": 4}
+            }
+          },
+          "release": {
+            "type": "object",
+            "properties": {
+              "performed": {"const": true},
+              "version": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"},
+              "path": {"const": "docs/p12/release-artifacts"},
+              "reproducible": {"const": true},
+              "artifacts": {"type": "object", "minProperties": 4, "maxProperties": 4}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "status": {"const": "non-certifying"},
+          "command": {"not": {"const": "./integration/p12/reproduce.sh"}},
+          "qualification": {"type": "null"},
+          "fuzz": {"type": "null"},
+          "reviews": {"type": "null"},
+          "benchmark": {
+            "type": "object",
+            "properties": {
+              "performed": {"const": false},
+              "runs": {"type": "array", "maxItems": 0}
+            }
+          },
+          "release": {
+            "type": "object",
+            "properties": {
+              "performed": {"const": false},
+              "version": {"type": "null"},
+              "path": {"type": "null"},
+              "reproducible": {"const": false},
+              "artifacts": {"type": "object", "maxProperties": 0}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

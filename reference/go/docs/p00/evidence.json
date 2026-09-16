@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-13",
+  "project": {
+    "module_path": "github.com/otuschhoff/go-librados",
+    "public_package": "rados",
+    "repository": "https://github.com/otuschhoff/go-librados.git"
+  },
+  "ceph": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "source_baseline": {
+      "tag": "v20.2.0",
+      "tag_object": "691ca7e4bc60299576df2a835d3bf0dc571c9501",
+      "commit": "69f84cc2651aa259a15bc192ddaabd3baba07489",
+      "files": {
+        "src/include/rados/librados.h": "sha256:6699d1ea51084553511b7b20ccf4206c2bc58af40178ca81dbcf41fc0d1ba91d",
+        "src/include/rados/librados.hpp": "sha256:e93ae340c196da3dada3ab857b2ff02df3b792cd9f946b389154aa6678fecb50",
+        "COPYING": "sha256:26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+      }
+    },
+    "qualification_release": {
+      "tag": "v20.2.4",
+      "tag_object": "d034dca571c94ea8a3d0c5da8aaf1051fce200cf",
+      "commit": "7f793731f1b39eb4f465e960113d2363c311b964"
+    }
+  },
+  "images": {
+    "baseline": {
+      "reference": "quay.io/ceph/ceph@sha256:1228c3d05e45fbc068a8c33614e4409b6dac688bcc77369b06009b5830fa8d86",
+      "amd64": "sha256:4c65c801a8e5e5704934118b2c723e7233f2b5de8552bfc8f129dabe1fced0b1",
+      "arm64": "sha256:b6b80a4709abafffbb670baecaa4df693b6ef20c203293f1721c7a209d36a5ba"
+    },
+    "qualification": {
+      "reference": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+      "amd64": "sha256:09ee90f6f3e0c7b9954f71d214ee05e9bbaaaea3716b1dd619603283b829f8b8",
+      "arm64": "sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa",
+      "runtime_packages": "ceph-common-20.2.4-0.el9, librados2-20.2.4-0.el9, python3-rados-20.2.4-0.el9"
+    }
+  },
+  "oracle": {
+    "compiler": "gcc-c++-11.5.0-15.el9",
+    "ceph_devel": "librados-devel-20.2.4-0.el9",
+    "cephpp_devel": "libradospp-devel-20.2.4-0.el9",
+    "devel_repository": "https://download.ceph.com/rpm-20.2.4/el9",
+    "ceph_devel_amd64_sha256": "5a8d9defce5f81634e52ad383aec7257156d355ad23a94fffc0d8df58314e195",
+    "ceph_devel_arm64_sha256": "8099805cc647054564b93231680c21ea1c7a8e7d7912ecdd706374e32fe56417",
+    "cephpp_devel_amd64_sha256": "e6b4af18428d87fcb6913bee11449d88fc956ead2f17cb1426b086e310b93e7a",
+    "cephpp_devel_arm64_sha256": "3344fc0a7a5d66a65da1bbd4d6b815b72a7e6b290aaccc5358dae32637c85f76",
+    "librados": "librados2-20.2.4-0.el9",
+    "source_sha256": "bfccf6b3593ce6abc83ac639f8d8430b18ee9c9e21bda0831e468f5d54cba1e3",
+    "dockerfile_sha256": "8771c2758a7d994db357b96d0a845bb1e919d3acaf846908e425565c31dc186d"
+  },
+  "go": {
+    "minimum": {
+      "version": "go1.26.8",
+      "linux_amd64_sha256": "d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b",
+      "linux_arm64_sha256": "211ffced9dcb9633a55eac6364816ec0ddd951389a740e88fa8b3337971bdda0"
+    },
+    "latest": {
+      "version": "go1.27.1",
+      "linux_amd64_sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+      "linux_arm64_sha256": "3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec"
+    }
+  },
+  "inventory": {
+    "c_exported_functions": 243,
+    "cpp_public_operations": 380,
+    "generator": "tools/api-inventory/main.go",
+    "output": "docs/p00/api-inventory.csv"
+  }
+}

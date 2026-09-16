@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-09-16T16:45:06Z",
+  "archive_sha256": "fca14fbb7bc8193d8081b48f83f655034d580e89232301f945ecd67001afa7cf",
+  "cases": [
+    {
+      "fixture": "entity-addr-ipv4-legacy.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_addr_t",
+        "select_test",
+        "3",
+        "set_features",
+        "0",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "3e0124654f5817281cfaa1b056f14b4128b546ef38994d765b6bb09c00868fbf",
+      "observed_sha256": "3e0124654f5817281cfaa1b056f14b4128b546ef38994d765b6bb09c00868fbf",
+      "pass": true
+    },
+    {
+      "fixture": "entity-addr-ipv4-modern.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_addr_t",
+        "select_test",
+        "3",
+        "set_features",
+        "720575940647714820",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "43c8ed879a7fd14a2d86ac42f0d78d9ae6d5a785f5e60b6658bcba3b3eb2d7e7",
+      "observed_sha256": "43c8ed879a7fd14a2d86ac42f0d78d9ae6d5a785f5e60b6658bcba3b3eb2d7e7",
+      "pass": true
+    },
+    {
+      "fixture": "entity-addr-ipv6-modern.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        "/var/folders/w6/z5pmj33j7rxg071c84mwvrzc0000gn/T/rados-rs-native-20260916-21259-9kv8u5:/src:ro",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_addr_t",
+        "import",
+        "/src/integration/p01/entity-addr-ipv6-seed.bin",
+        "decode",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "a5b18e8166e8aa1d0c3285a6c1a3470851ae2bd229b28da857328c3bd2217986",
+      "observed_sha256": "a5b18e8166e8aa1d0c3285a6c1a3470851ae2bd229b28da857328c3bd2217986",
+      "pass": true
+    },
+    {
+      "fixture": "entity-addrvec-modern.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_addrvec_t",
+        "select_test",
+        "3",
+        "set_features",
+        "720575940647714820",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "f26c6ce30fe8892264a14b6cd5042549d1eee314f921cf8019faf6be9d5c4345",
+      "observed_sha256": "f26c6ce30fe8892264a14b6cd5042549d1eee314f921cf8019faf6be9d5c4345",
+      "pass": true
+    },
+    {
+      "fixture": "entity-name-client-1.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_name_t",
+        "select_test",
+        "4",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "0ea9e19802a23c4674e289fabeaa6e600262fb9ad25ae64fd4fb927651b6abe9",
+      "observed_sha256": "0ea9e19802a23c4674e289fabeaa6e600262fb9ad25ae64fd4fb927651b6abe9",
+      "pass": true
+    },
+    {
+      "fixture": "entity-name-mon-new.bin",
+      "argv": [
+        "docker",
+        "run",
+        "--rm",
+        "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ceph-dencoder",
+        "type",
+        "entity_name_t",
+        "select_test",
+        "1",
+        "encode",
+        "export",
+        "/dev/stdout"
+      ],
+      "exit_code": 0,
+      "stderr": "WARNING: The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8) and no specific platform was requested\n",
+      "expected_sha256": "1272f520cf7ca5cf117a0b5a3116518371bf20fb7fac043ac1be568b8c55b96c",
+      "observed_sha256": "1272f520cf7ca5cf117a0b5a3116518371bf20fb7fac043ac1be568b8c55b96c",
+      "pass": true
+    }
+  ],
+  "completed_at": "2026-09-16T16:45:16Z",
+  "pass": true
+}

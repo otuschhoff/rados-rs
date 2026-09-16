@@ -1,0 +1,2258 @@
+[
+  {
+    "id": "go:ChecksumCRC32C",
+    "symbol": "ChecksumCRC32C",
+    "kind": "const",
+    "file": "object.go",
+    "line": 52,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ChecksumType",
+    "symbol": "ChecksumType",
+    "kind": "type",
+    "file": "object.go",
+    "line": 47,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ChecksumXXHash32",
+    "symbol": "ChecksumXXHash32",
+    "kind": "const",
+    "file": "object.go",
+    "line": 50,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ChecksumXXHash64",
+    "symbol": "ChecksumXXHash64",
+    "kind": "const",
+    "file": "object.go",
+    "line": 51,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClassResult",
+    "symbol": "ClassResult",
+    "kind": "type",
+    "file": "object.go",
+    "line": 60,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClassResult.Code",
+    "symbol": "ClassResult.Code",
+    "kind": "field",
+    "file": "object.go",
+    "line": 62,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClassResult.Data",
+    "symbol": "ClassResult.Data",
+    "kind": "field",
+    "file": "object.go",
+    "line": 61,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Client",
+    "symbol": "Client",
+    "kind": "type",
+    "file": "client.go",
+    "line": 54,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Client.Blocklist",
+    "symbol": "Client.Blocklist",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 320,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.Close",
+    "symbol": "Client.Close",
+    "kind": "method",
+    "file": "client.go",
+    "line": 326,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Client.ClusterStats",
+    "symbol": "Client.ClusterStats",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 48,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.Connect",
+    "symbol": "Client.Connect",
+    "kind": "method",
+    "file": "client.go",
+    "line": 109,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Client.CreatePool",
+    "symbol": "Client.CreatePool",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 184,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.DeletePool",
+    "symbol": "Client.DeletePool",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 199,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.FSID",
+    "symbol": "Client.FSID",
+    "kind": "method",
+    "file": "client.go",
+    "line": 378,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Client.Flush",
+    "symbol": "Client.Flush",
+    "kind": "method",
+    "file": "client.go",
+    "line": 273,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Client.InstanceID",
+    "symbol": "Client.InstanceID",
+    "kind": "method",
+    "file": "client.go",
+    "line": 390,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Client.ListInconsistentObjects",
+    "symbol": "Client.ListInconsistentObjects",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 142,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.ListInconsistentPGs",
+    "symbol": "Client.ListInconsistentPGs",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 82,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.ManagerCommand",
+    "symbol": "Client.ManagerCommand",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 367,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.MonitorCommand",
+    "symbol": "Client.MonitorCommand",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 350,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.OSDCommand",
+    "symbol": "Client.OSDCommand",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 384,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.OpenPool",
+    "symbol": "Client.OpenPool",
+    "kind": "method",
+    "file": "client.go",
+    "line": 232,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Client.OpenPoolByID",
+    "symbol": "Client.OpenPoolByID",
+    "kind": "method",
+    "file": "client.go",
+    "line": 252,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Client.PGCommand",
+    "symbol": "Client.PGCommand",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 404,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.SessionAddresses",
+    "symbol": "Client.SessionAddresses",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 165,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Client.Shutdown",
+    "symbol": "Client.Shutdown",
+    "kind": "method",
+    "file": "client.go",
+    "line": 287,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ClusterStats",
+    "symbol": "ClusterStats",
+    "kind": "type",
+    "file": "admin.go",
+    "line": 23,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClusterStats.KB",
+    "symbol": "ClusterStats.KB",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 24,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClusterStats.KBAvailable",
+    "symbol": "ClusterStats.KBAvailable",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 26,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClusterStats.KBUsed",
+    "symbol": "ClusterStats.KBUsed",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 25,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ClusterStats.Objects",
+    "symbol": "ClusterStats.Objects",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 27,
+    "phase": "R02"
+  },
+  {
+    "id": "go:CommandResult",
+    "symbol": "CommandResult",
+    "kind": "type",
+    "file": "admin.go",
+    "line": 18,
+    "phase": "R02"
+  },
+  {
+    "id": "go:CommandResult.Output",
+    "symbol": "CommandResult.Output",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 19,
+    "phase": "R02"
+  },
+  {
+    "id": "go:CommandResult.Status",
+    "symbol": "CommandResult.Status",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 20,
+    "phase": "R02"
+  },
+  {
+    "id": "go:CompareObjectCursors",
+    "symbol": "CompareObjectCursors",
+    "kind": "function",
+    "file": "object.go",
+    "line": 142,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Config",
+    "symbol": "Config",
+    "kind": "type",
+    "file": "client.go",
+    "line": 40,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.ClusterFSID",
+    "symbol": "Config.ClusterFSID",
+    "kind": "field",
+    "file": "client.go",
+    "line": 43,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.DialTimeout",
+    "symbol": "Config.DialTimeout",
+    "kind": "field",
+    "file": "client.go",
+    "line": 46,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.Entity",
+    "symbol": "Config.Entity",
+    "kind": "field",
+    "file": "client.go",
+    "line": 42,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.HandshakeTimeout",
+    "symbol": "Config.HandshakeTimeout",
+    "kind": "field",
+    "file": "client.go",
+    "line": 47,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.Key",
+    "symbol": "Config.Key",
+    "kind": "field",
+    "file": "client.go",
+    "line": 44,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.Monitors",
+    "symbol": "Config.Monitors",
+    "kind": "field",
+    "file": "client.go",
+    "line": 41,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.OperationTimeout",
+    "symbol": "Config.OperationTimeout",
+    "kind": "field",
+    "file": "client.go",
+    "line": 48,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.Option",
+    "symbol": "Config.Option",
+    "kind": "method",
+    "file": "config.go",
+    "line": 185,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Config.ParseArgs",
+    "symbol": "Config.ParseArgs",
+    "kind": "method",
+    "file": "config.go",
+    "line": 224,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Config.ParseEnv",
+    "symbol": "Config.ParseEnv",
+    "kind": "method",
+    "file": "config.go",
+    "line": 282,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Config.SecurityMode",
+    "symbol": "Config.SecurityMode",
+    "kind": "field",
+    "file": "client.go",
+    "line": 45,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Config.WithOption",
+    "symbol": "Config.WithOption",
+    "kind": "method",
+    "file": "config.go",
+    "line": 94,
+    "phase": "R05"
+  },
+  {
+    "id": "go:DefaultConfig",
+    "symbol": "DefaultConfig",
+    "kind": "function",
+    "file": "config.go",
+    "line": 24,
+    "phase": "R05"
+  },
+  {
+    "id": "go:ErrCanceled",
+    "symbol": "ErrCanceled",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 19,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrClosed",
+    "symbol": "ErrClosed",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 20,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrConflict",
+    "symbol": "ErrConflict",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 17,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrExists",
+    "symbol": "ErrExists",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 12,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrInvalidArgument",
+    "symbol": "ErrInvalidArgument",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 15,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrNotFound",
+    "symbol": "ErrNotFound",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 11,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrOutcomeUnknown",
+    "symbol": "ErrOutcomeUnknown",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 21,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrPermission",
+    "symbol": "ErrPermission",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 13,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrQuotaOrFull",
+    "symbol": "ErrQuotaOrFull",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 16,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrTimeout",
+    "symbol": "ErrTimeout",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 18,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrUnsupported",
+    "symbol": "ErrUnsupported",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 14,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ErrWatchInterrupted",
+    "symbol": "ErrWatchInterrupted",
+    "kind": "var",
+    "file": "errors.go",
+    "line": 22,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentObject",
+    "symbol": "InconsistentObject",
+    "kind": "type",
+    "file": "admin.go",
+    "line": 37,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentObject.Errors",
+    "symbol": "InconsistentObject.Errors",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 40,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentObject.Object",
+    "symbol": "InconsistentObject.Object",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 38,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentObject.Shards",
+    "symbol": "InconsistentObject.Shards",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 39,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentPG",
+    "symbol": "InconsistentPG",
+    "kind": "type",
+    "file": "admin.go",
+    "line": 43,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentPG.Errors",
+    "symbol": "InconsistentPG.Errors",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 45,
+    "phase": "R02"
+  },
+  {
+    "id": "go:InconsistentPG.PG",
+    "symbol": "InconsistentPG.PG",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 44,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LoadConfig",
+    "symbol": "LoadConfig",
+    "kind": "function",
+    "file": "config.go",
+    "line": 53,
+    "phase": "R05"
+  },
+  {
+    "id": "go:LoadKeyring",
+    "symbol": "LoadKeyring",
+    "kind": "function",
+    "file": "config.go",
+    "line": 75,
+    "phase": "R05"
+  },
+  {
+    "id": "go:LockExclusive",
+    "symbol": "LockExclusive",
+    "kind": "const",
+    "file": "coordination.go",
+    "line": 17,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockMode",
+    "symbol": "LockMode",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 14,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions",
+    "symbol": "LockOptions",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 21,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions.Cookie",
+    "symbol": "LockOptions.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 22,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions.Description",
+    "symbol": "LockOptions.Description",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 24,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions.Duration",
+    "symbol": "LockOptions.Duration",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 25,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions.Renew",
+    "symbol": "LockOptions.Renew",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 26,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockOptions.Tag",
+    "symbol": "LockOptions.Tag",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 23,
+    "phase": "R02"
+  },
+  {
+    "id": "go:LockShared",
+    "symbol": "LockShared",
+    "kind": "const",
+    "file": "coordination.go",
+    "line": 18,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker",
+    "symbol": "Locker",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 29,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Address",
+    "symbol": "Locker.Address",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 32,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Client",
+    "symbol": "Locker.Client",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 30,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Cookie",
+    "symbol": "Locker.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 31,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Description",
+    "symbol": "Locker.Description",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 33,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Expiration",
+    "symbol": "Locker.Expiration",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 34,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Mode",
+    "symbol": "Locker.Mode",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 35,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Locker.Tag",
+    "symbol": "Locker.Tag",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 36,
+    "phase": "R02"
+  },
+  {
+    "id": "go:MaxWatchQueue",
+    "symbol": "MaxWatchQueue",
+    "kind": "const",
+    "file": "coordination.go",
+    "line": 70,
+    "phase": "R02"
+  },
+  {
+    "id": "go:New",
+    "symbol": "New",
+    "kind": "function",
+    "file": "client.go",
+    "line": 77,
+    "phase": "R05"
+  },
+  {
+    "id": "go:NewP12DiagnosticClient",
+    "symbol": "NewP12DiagnosticClient",
+    "kind": "function",
+    "file": "p12_diagnostics.go",
+    "line": 25,
+    "phase": "R13"
+  },
+  {
+    "id": "go:NewReadOp",
+    "symbol": "NewReadOp",
+    "kind": "function",
+    "file": "metadata.go",
+    "line": 52,
+    "phase": "R09"
+  },
+  {
+    "id": "go:NewWriteOp",
+    "symbol": "NewWriteOp",
+    "kind": "function",
+    "file": "metadata.go",
+    "line": 53,
+    "phase": "R09"
+  },
+  {
+    "id": "go:NotifyAcknowledgment",
+    "symbol": "NotifyAcknowledgment",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 53,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyAcknowledgment.Client",
+    "symbol": "NotifyAcknowledgment.Client",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 54,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyAcknowledgment.Cookie",
+    "symbol": "NotifyAcknowledgment.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 55,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyAcknowledgment.Data",
+    "symbol": "NotifyAcknowledgment.Data",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 56,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyReply",
+    "symbol": "NotifyReply",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 64,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyReply.Acknowledged",
+    "symbol": "NotifyReply.Acknowledged",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 65,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyReply.TimedOut",
+    "symbol": "NotifyReply.TimedOut",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 66,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyTimeout",
+    "symbol": "NotifyTimeout",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 59,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyTimeout.Client",
+    "symbol": "NotifyTimeout.Client",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 60,
+    "phase": "R02"
+  },
+  {
+    "id": "go:NotifyTimeout.Cookie",
+    "symbol": "NotifyTimeout.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 61,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OMAPEntry",
+    "symbol": "OMAPEntry",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 24,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OMAPEntry.Key",
+    "symbol": "OMAPEntry.Key",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 25,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OMAPEntry.Value",
+    "symbol": "OMAPEntry.Value",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 26,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectCursor",
+    "symbol": "ObjectCursor",
+    "kind": "type",
+    "file": "object.go",
+    "line": 78,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectCursor.IsEnd",
+    "symbol": "ObjectCursor.IsEnd",
+    "kind": "method",
+    "file": "object.go",
+    "line": 140,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectEntry",
+    "symbol": "ObjectEntry",
+    "kind": "type",
+    "file": "object.go",
+    "line": 72,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectEntry.Locator",
+    "symbol": "ObjectEntry.Locator",
+    "kind": "field",
+    "file": "object.go",
+    "line": 75,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectEntry.Name",
+    "symbol": "ObjectEntry.Name",
+    "kind": "field",
+    "file": "object.go",
+    "line": 73,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectEntry.Namespace",
+    "symbol": "ObjectEntry.Namespace",
+    "kind": "field",
+    "file": "object.go",
+    "line": 74,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectInfo",
+    "symbol": "ObjectInfo",
+    "kind": "type",
+    "file": "object.go",
+    "line": 31,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectInfo.ModTime",
+    "symbol": "ObjectInfo.ModTime",
+    "kind": "field",
+    "file": "object.go",
+    "line": 33,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectInfo.Size",
+    "symbol": "ObjectInfo.Size",
+    "kind": "field",
+    "file": "object.go",
+    "line": 32,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectInfo.Version",
+    "symbol": "ObjectInfo.Version",
+    "kind": "field",
+    "file": "object.go",
+    "line": 34,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectPage",
+    "symbol": "ObjectPage",
+    "kind": "type",
+    "file": "object.go",
+    "line": 85,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectPage.More",
+    "symbol": "ObjectPage.More",
+    "kind": "field",
+    "file": "object.go",
+    "line": 88,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectPage.Next",
+    "symbol": "ObjectPage.Next",
+    "kind": "field",
+    "file": "object.go",
+    "line": 87,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectPage.Values",
+    "symbol": "ObjectPage.Values",
+    "kind": "field",
+    "file": "object.go",
+    "line": 86,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectRef",
+    "symbol": "ObjectRef",
+    "kind": "type",
+    "file": "object.go",
+    "line": 26,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ObjectRef.Append",
+    "symbol": "ObjectRef.Append",
+    "kind": "method",
+    "file": "object.go",
+    "line": 357,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.BreakLock",
+    "symbol": "ObjectRef.BreakLock",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 326,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.Checksum",
+    "symbol": "ObjectRef.Checksum",
+    "kind": "method",
+    "file": "object.go",
+    "line": 319,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.CopyFrom",
+    "symbol": "ObjectRef.CopyFrom",
+    "kind": "method",
+    "file": "object.go",
+    "line": 381,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.CopyFrom2",
+    "symbol": "ObjectRef.CopyFrom2",
+    "kind": "method",
+    "file": "object.go",
+    "line": 385,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.Create",
+    "symbol": "ObjectRef.Create",
+    "kind": "method",
+    "file": "object.go",
+    "line": 418,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.Exec",
+    "symbol": "ObjectRef.Exec",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 152,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.ExecuteRead",
+    "symbol": "ObjectRef.ExecuteRead",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 324,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.ExecuteWrite",
+    "symbol": "ObjectRef.ExecuteWrite",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 335,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.GetOMAP",
+    "symbol": "ObjectRef.GetOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 131,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.GetOMAPHeader",
+    "symbol": "ObjectRef.GetOMAPHeader",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 123,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.GetXAttr",
+    "symbol": "ObjectRef.GetXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 55,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.ListLockers",
+    "symbol": "ObjectRef.ListLockers",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 303,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.ListOMAP",
+    "symbol": "ObjectRef.ListOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 98,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.ListWatchers",
+    "symbol": "ObjectRef.ListWatchers",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 241,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.ListXAttrs",
+    "symbol": "ObjectRef.ListXAttrs",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 81,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.Lock",
+    "symbol": "ObjectRef.Lock",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 272,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.Notify",
+    "symbol": "ObjectRef.Notify",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 200,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.Read",
+    "symbol": "ObjectRef.Read",
+    "kind": "method",
+    "file": "object.go",
+    "line": 286,
+    "phase": "R07"
+  },
+  {
+    "id": "go:ObjectRef.Remove",
+    "symbol": "ObjectRef.Remove",
+    "kind": "method",
+    "file": "object.go",
+    "line": 414,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.RemoveXAttr",
+    "symbol": "ObjectRef.RemoveXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 74,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.RollbackToSelfManagedSnapshot",
+    "symbol": "ObjectRef.RollbackToSelfManagedSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 130,
+    "phase": "R11"
+  },
+  {
+    "id": "go:ObjectRef.RollbackToSnapshot",
+    "symbol": "ObjectRef.RollbackToSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 122,
+    "phase": "R11"
+  },
+  {
+    "id": "go:ObjectRef.SetAllocationHint",
+    "symbol": "ObjectRef.SetAllocationHint",
+    "kind": "method",
+    "file": "object.go",
+    "line": 377,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.SetXAttr",
+    "symbol": "ObjectRef.SetXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 66,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ObjectRef.SparseRead",
+    "symbol": "ObjectRef.SparseRead",
+    "kind": "method",
+    "file": "object.go",
+    "line": 299,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.Stat",
+    "symbol": "ObjectRef.Stat",
+    "kind": "method",
+    "file": "object.go",
+    "line": 336,
+    "phase": "R07"
+  },
+  {
+    "id": "go:ObjectRef.Truncate",
+    "symbol": "ObjectRef.Truncate",
+    "kind": "method",
+    "file": "object.go",
+    "line": 361,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.Unlock",
+    "symbol": "ObjectRef.Unlock",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 289,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.Watch",
+    "symbol": "ObjectRef.Watch",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 86,
+    "phase": "R10"
+  },
+  {
+    "id": "go:ObjectRef.Write",
+    "symbol": "ObjectRef.Write",
+    "kind": "method",
+    "file": "object.go",
+    "line": 349,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.WriteFull",
+    "symbol": "ObjectRef.WriteFull",
+    "kind": "method",
+    "file": "object.go",
+    "line": 353,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.WriteSame",
+    "symbol": "ObjectRef.WriteSame",
+    "kind": "method",
+    "file": "object.go",
+    "line": 369,
+    "phase": "R08"
+  },
+  {
+    "id": "go:ObjectRef.Zero",
+    "symbol": "ObjectRef.Zero",
+    "kind": "method",
+    "file": "object.go",
+    "line": 365,
+    "phase": "R08"
+  },
+  {
+    "id": "go:OpError",
+    "symbol": "OpError",
+    "kind": "type",
+    "file": "errors.go",
+    "line": 27,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Code",
+    "symbol": "OpError.Code",
+    "kind": "field",
+    "file": "errors.go",
+    "line": 30,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Err",
+    "symbol": "OpError.Err",
+    "kind": "field",
+    "file": "errors.go",
+    "line": 31,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Error",
+    "symbol": "OpError.Error",
+    "kind": "method",
+    "file": "errors.go",
+    "line": 34,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Is",
+    "symbol": "OpError.Is",
+    "kind": "method",
+    "file": "errors.go",
+    "line": 61,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Op",
+    "symbol": "OpError.Op",
+    "kind": "field",
+    "file": "errors.go",
+    "line": 28,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Target",
+    "symbol": "OpError.Target",
+    "kind": "field",
+    "file": "errors.go",
+    "line": 29,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpError.Unwrap",
+    "symbol": "OpError.Unwrap",
+    "kind": "method",
+    "file": "errors.go",
+    "line": 54,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpResult",
+    "symbol": "OpResult",
+    "kind": "type",
+    "file": "object.go",
+    "line": 55,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpResult.Results",
+    "symbol": "OpResult.Results",
+    "kind": "field",
+    "file": "object.go",
+    "line": 57,
+    "phase": "R02"
+  },
+  {
+    "id": "go:OpResult.Version",
+    "symbol": "OpResult.Version",
+    "kind": "field",
+    "file": "object.go",
+    "line": 56,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12DiagnosticObserver",
+    "symbol": "P12DiagnosticObserver",
+    "kind": "type",
+    "file": "p12_diagnostics.go",
+    "line": 20,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic",
+    "symbol": "P12SessionDiagnostic",
+    "kind": "type",
+    "file": "p12_diagnostics.go",
+    "line": 11,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.Generation",
+    "symbol": "P12SessionDiagnostic.Generation",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 16,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.RenewalDue",
+    "symbol": "P12SessionDiagnostic.RenewalDue",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 12,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.Service",
+    "symbol": "P12SessionDiagnostic.Service",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 13,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.ServiceID",
+    "symbol": "P12SessionDiagnostic.ServiceID",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 14,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.SessionID",
+    "symbol": "P12SessionDiagnostic.SessionID",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 15,
+    "phase": "R02"
+  },
+  {
+    "id": "go:P12SessionDiagnostic.Timestamp",
+    "symbol": "P12SessionDiagnostic.Timestamp",
+    "kind": "field",
+    "file": "p12_diagnostics.go",
+    "line": 17,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Page",
+    "symbol": "Page",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 29,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Page.More",
+    "symbol": "Page.More",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 31,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Page.Values",
+    "symbol": "Page.Values",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 30,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ParseConfig",
+    "symbol": "ParseConfig",
+    "kind": "function",
+    "file": "config.go",
+    "line": 36,
+    "phase": "R05"
+  },
+  {
+    "id": "go:Pool",
+    "symbol": "Pool",
+    "kind": "type",
+    "file": "object.go",
+    "line": 14,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Pool.BeginObjectCursor",
+    "symbol": "Pool.BeginObjectCursor",
+    "kind": "method",
+    "file": "object.go",
+    "line": 132,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.CreateSelfManagedSnapshot",
+    "symbol": "Pool.CreateSelfManagedSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 35,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.CreateSnapshot",
+    "symbol": "Pool.CreateSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 19,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.EnableApplication",
+    "symbol": "Pool.EnableApplication",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 215,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.EndObjectCursor",
+    "symbol": "Pool.EndObjectCursor",
+    "kind": "method",
+    "file": "object.go",
+    "line": 136,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.GetApplicationMetadata",
+    "symbol": "Pool.GetApplicationMetadata",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 244,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.ID",
+    "symbol": "Pool.ID",
+    "kind": "method",
+    "file": "object.go",
+    "line": 96,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.IsErasureCoded",
+    "symbol": "Pool.IsErasureCoded",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 95,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.ListApplicationMetadata",
+    "symbol": "Pool.ListApplicationMetadata",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 260,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.ListApplications",
+    "symbol": "Pool.ListApplications",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 231,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.ListObjects",
+    "symbol": "Pool.ListObjects",
+    "kind": "method",
+    "file": "object.go",
+    "line": 200,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.ListObjectsRange",
+    "symbol": "Pool.ListObjectsRange",
+    "kind": "method",
+    "file": "object.go",
+    "line": 204,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.ListSnapshots",
+    "symbol": "Pool.ListSnapshots",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 55,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.LookupSnapshot",
+    "symbol": "Pool.LookupSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 69,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.Name",
+    "symbol": "Pool.Name",
+    "kind": "method",
+    "file": "object.go",
+    "line": 97,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.Object",
+    "symbol": "Pool.Object",
+    "kind": "method",
+    "file": "object.go",
+    "line": 130,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.RemoveApplicationMetadata",
+    "symbol": "Pool.RemoveApplicationMetadata",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 227,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.RemoveSelfManagedSnapshot",
+    "symbol": "Pool.RemoveSelfManagedSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 47,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.RemoveSnapshot",
+    "symbol": "Pool.RemoveSnapshot",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 27,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.RequiredAlignment",
+    "symbol": "Pool.RequiredAlignment",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 113,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.RequiresAlignment",
+    "symbol": "Pool.RequiresAlignment",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 104,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.SetApplicationMetadata",
+    "symbol": "Pool.SetApplicationMetadata",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 223,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.SplitCursor",
+    "symbol": "Pool.SplitCursor",
+    "kind": "method",
+    "file": "object.go",
+    "line": 164,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.Stats",
+    "symbol": "Pool.Stats",
+    "kind": "method",
+    "file": "admin.go",
+    "line": 61,
+    "phase": "R12"
+  },
+  {
+    "id": "go:Pool.UsesSelfManagedSnapshots",
+    "symbol": "Pool.UsesSelfManagedSnapshots",
+    "kind": "method",
+    "file": "snapshot.go",
+    "line": 86,
+    "phase": "R11"
+  },
+  {
+    "id": "go:Pool.WithLocator",
+    "symbol": "Pool.WithLocator",
+    "kind": "method",
+    "file": "object.go",
+    "line": 104,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.WithNamespace",
+    "symbol": "Pool.WithNamespace",
+    "kind": "method",
+    "file": "object.go",
+    "line": 99,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.WithReadSnapshot",
+    "symbol": "Pool.WithReadSnapshot",
+    "kind": "method",
+    "file": "object.go",
+    "line": 109,
+    "phase": "R08"
+  },
+  {
+    "id": "go:Pool.WithWriteSnapshot",
+    "symbol": "Pool.WithWriteSnapshot",
+    "kind": "method",
+    "file": "object.go",
+    "line": 114,
+    "phase": "R08"
+  },
+  {
+    "id": "go:PoolStats",
+    "symbol": "PoolStats",
+    "kind": "type",
+    "file": "admin.go",
+    "line": 30,
+    "phase": "R02"
+  },
+  {
+    "id": "go:PoolStats.BytesUsed",
+    "symbol": "PoolStats.BytesUsed",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 31,
+    "phase": "R02"
+  },
+  {
+    "id": "go:PoolStats.Objects",
+    "symbol": "PoolStats.Objects",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 32,
+    "phase": "R02"
+  },
+  {
+    "id": "go:PoolStats.ReadBytes",
+    "symbol": "PoolStats.ReadBytes",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 33,
+    "phase": "R02"
+  },
+  {
+    "id": "go:PoolStats.WriteBytes",
+    "symbol": "PoolStats.WriteBytes",
+    "kind": "field",
+    "file": "admin.go",
+    "line": 34,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ReadOp",
+    "symbol": "ReadOp",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 38,
+    "phase": "R02"
+  },
+  {
+    "id": "go:ReadOp.AssertExists",
+    "symbol": "ReadOp.AssertExists",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 171,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.AssertVersion",
+    "symbol": "ReadOp.AssertVersion",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 173,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.Exec",
+    "symbol": "ReadOp.Exec",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 199,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.GetOMAPHeader",
+    "symbol": "ReadOp.GetOMAPHeader",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 184,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.GetXAttr",
+    "symbol": "ReadOp.GetXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 177,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.ListOMAP",
+    "symbol": "ReadOp.ListOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 188,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.Read",
+    "symbol": "ReadOp.Read",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 165,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.SetFlags",
+    "symbol": "ReadOp.SetFlags",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 207,
+    "phase": "R09"
+  },
+  {
+    "id": "go:ReadOp.Stat",
+    "symbol": "ReadOp.Stat",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 169,
+    "phase": "R09"
+  },
+  {
+    "id": "go:SecurityMode",
+    "symbol": "SecurityMode",
+    "kind": "type",
+    "file": "client.go",
+    "line": 33,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SecurityModeCRC",
+    "symbol": "SecurityModeCRC",
+    "kind": "const",
+    "file": "client.go",
+    "line": 37,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SecurityModeSecure",
+    "symbol": "SecurityModeSecure",
+    "kind": "const",
+    "file": "client.go",
+    "line": 36,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Snapshot",
+    "symbol": "Snapshot",
+    "kind": "type",
+    "file": "snapshot.go",
+    "line": 13,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Snapshot.CreatedAt",
+    "symbol": "Snapshot.CreatedAt",
+    "kind": "field",
+    "file": "snapshot.go",
+    "line": 16,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Snapshot.ID",
+    "symbol": "Snapshot.ID",
+    "kind": "field",
+    "file": "snapshot.go",
+    "line": 14,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Snapshot.Name",
+    "symbol": "Snapshot.Name",
+    "kind": "field",
+    "file": "snapshot.go",
+    "line": 15,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SnapshotContext",
+    "symbol": "SnapshotContext",
+    "kind": "type",
+    "file": "object.go",
+    "line": 37,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SnapshotContext.Sequence",
+    "symbol": "SnapshotContext.Sequence",
+    "kind": "field",
+    "file": "object.go",
+    "line": 38,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SnapshotContext.Snapshots",
+    "symbol": "SnapshotContext.Snapshots",
+    "kind": "field",
+    "file": "object.go",
+    "line": 39,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SparseExtent",
+    "symbol": "SparseExtent",
+    "kind": "type",
+    "file": "object.go",
+    "line": 42,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SparseExtent.Data",
+    "symbol": "SparseExtent.Data",
+    "kind": "field",
+    "file": "object.go",
+    "line": 44,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SparseExtent.Offset",
+    "symbol": "SparseExtent.Offset",
+    "kind": "field",
+    "file": "object.go",
+    "line": 43,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpFlagFailOK",
+    "symbol": "SubOpFlagFailOK",
+    "kind": "const",
+    "file": "metadata.go",
+    "line": 36,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpFlags",
+    "symbol": "SubOpFlags",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 34,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpResult",
+    "symbol": "SubOpResult",
+    "kind": "type",
+    "file": "object.go",
+    "line": 65,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpResult.Code",
+    "symbol": "SubOpResult.Code",
+    "kind": "field",
+    "file": "object.go",
+    "line": 67,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpResult.Data",
+    "symbol": "SubOpResult.Data",
+    "kind": "field",
+    "file": "object.go",
+    "line": 66,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpResult.Err",
+    "symbol": "SubOpResult.Err",
+    "kind": "field",
+    "file": "object.go",
+    "line": 69,
+    "phase": "R02"
+  },
+  {
+    "id": "go:SubOpResult.Value",
+    "symbol": "SubOpResult.Value",
+    "kind": "field",
+    "file": "object.go",
+    "line": 68,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watch",
+    "symbol": "Watch",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 72,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watch.Ack",
+    "symbol": "Watch.Ack",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 112,
+    "phase": "R10"
+  },
+  {
+    "id": "go:Watch.Close",
+    "symbol": "Watch.Close",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 127,
+    "phase": "R10"
+  },
+  {
+    "id": "go:Watch.Cookie",
+    "symbol": "Watch.Cookie",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 79,
+    "phase": "R10"
+  },
+  {
+    "id": "go:Watch.Done",
+    "symbol": "Watch.Done",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 149,
+    "phase": "R10"
+  },
+  {
+    "id": "go:Watch.Errors",
+    "symbol": "Watch.Errors",
+    "kind": "method",
+    "file": "coordination.go",
+    "line": 142,
+    "phase": "R10"
+  },
+  {
+    "id": "go:WatchEvent",
+    "symbol": "WatchEvent",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 39,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WatchEvent.Cookie",
+    "symbol": "WatchEvent.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 41,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WatchEvent.Data",
+    "symbol": "WatchEvent.Data",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 43,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WatchEvent.Notifier",
+    "symbol": "WatchEvent.Notifier",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 42,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WatchEvent.NotifyID",
+    "symbol": "WatchEvent.NotifyID",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 40,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watcher",
+    "symbol": "Watcher",
+    "kind": "type",
+    "file": "coordination.go",
+    "line": 46,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watcher.Address",
+    "symbol": "Watcher.Address",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 48,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watcher.Client",
+    "symbol": "Watcher.Client",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 47,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watcher.Cookie",
+    "symbol": "Watcher.Cookie",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 49,
+    "phase": "R02"
+  },
+  {
+    "id": "go:Watcher.Timeout",
+    "symbol": "Watcher.Timeout",
+    "kind": "field",
+    "file": "coordination.go",
+    "line": 50,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WriteOp",
+    "symbol": "WriteOp",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 45,
+    "phase": "R02"
+  },
+  {
+    "id": "go:WriteOp.Append",
+    "symbol": "WriteOp.Append",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 227,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.AssertVersion",
+    "symbol": "WriteOp.AssertVersion",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 241,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.ClearOMAP",
+    "symbol": "WriteOp.ClearOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 297,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.CompareExtent",
+    "symbol": "WriteOp.CompareExtent",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 245,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.CompareOMAP",
+    "symbol": "WriteOp.CompareOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 304,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Create",
+    "symbol": "WriteOp.Create",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 211,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Exec",
+    "symbol": "WriteOp.Exec",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 312,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Remove",
+    "symbol": "WriteOp.Remove",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 239,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.RemoveOMAP",
+    "symbol": "WriteOp.RemoveOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 279,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.RemoveOMAPRange",
+    "symbol": "WriteOp.RemoveOMAPRange",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 288,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.RemoveXAttr",
+    "symbol": "WriteOp.RemoveXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 258,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.SetFlags",
+    "symbol": "WriteOp.SetFlags",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 320,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.SetOMAP",
+    "symbol": "WriteOp.SetOMAP",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 266,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.SetOMAPHeader",
+    "symbol": "WriteOp.SetOMAPHeader",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 299,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.SetXAttr",
+    "symbol": "WriteOp.SetXAttr",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 249,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Truncate",
+    "symbol": "WriteOp.Truncate",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 231,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Write",
+    "symbol": "WriteOp.Write",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 219,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.WriteFull",
+    "symbol": "WriteOp.WriteFull",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 223,
+    "phase": "R09"
+  },
+  {
+    "id": "go:WriteOp.Zero",
+    "symbol": "WriteOp.Zero",
+    "kind": "method",
+    "file": "metadata.go",
+    "line": 235,
+    "phase": "R09"
+  },
+  {
+    "id": "go:XAttr",
+    "symbol": "XAttr",
+    "kind": "type",
+    "file": "metadata.go",
+    "line": 19,
+    "phase": "R02"
+  },
+  {
+    "id": "go:XAttr.Name",
+    "symbol": "XAttr.Name",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 20,
+    "phase": "R02"
+  },
+  {
+    "id": "go:XAttr.Value",
+    "symbol": "XAttr.Value",
+    "kind": "field",
+    "file": "metadata.go",
+    "line": 21,
+    "phase": "R02"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture": "entity-name-mon-new.bin",
+  "sha256": "1272f520cf7ca5cf117a0b5a3116518371bf20fb7fac043ac1be568b8c55b96c",
+  "kind": "native-oracle",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/include/encoding.h", "src/msg/msg_types.h", "src/tools/ceph-dencoder/common_types.h", "src/tools/ceph-dencoder/ceph_dencoder.cc"]
+  },
+  "generator": {
+    "tool": "ceph-dencoder",
+    "version": "20.2.4",
+    "command": ["docker", "run", "--rm", "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9", "ceph-dencoder", "type", "entity_name_t", "select_test", "1", "encode", "export", "/dev/stdout"],
+    "image": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+  },
+  "secrets": {"contains_secrets": false, "synthetic_only": true},
+  "license": {"upstream_expression": "LGPL-2.1-or-later; generated protocol data", "redistribution": "approved", "reviewed_by": "Oliver Tuschhoff"}
+}
