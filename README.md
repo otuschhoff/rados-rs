@@ -4,7 +4,8 @@ A native Rust Ceph RADOS client in phased development, ported from the pinned
 pure-Go reference. R00 reference capture, the R01 workspace/evidence bridge,
 R02 API contracts and bounded wire types are complete. R03 private messenger
 codecs, session state and committed-tree differential verification are complete;
-R04 authentication and live secure sessions follow.
+R04 private CephX authentication, secure monitor sessions and evidence tooling
+are implemented and under final validation.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -14,7 +15,8 @@ The repository is private and has an independent main branch, CI and release
 lifecycle. Ordinary Rust tests work without Go, network access or a sibling
 checkout. The current library exposes locally validated ownership, error,
 options and lifecycle contracts plus private bounded wire and messenger
-machinery; it does not yet authenticate or connect to Ceph.
+machinery. Its feature-gated qualification probe authenticates to a pinned Ceph
+monitor, while the ordinary public `Client` remains intentionally disconnected.
 
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
@@ -39,6 +41,10 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R03 differential probe protocol](docs/r03/probe-protocol.md)
 - [R03 dependency review](docs/r03/dependencies.md)
 - [R03 execution and R04 handoff](docs/r03/STATUS.md)
+- [R04 deterministic CephX core](docs/r04/cephx-core.md)
+- [R04 differential probe protocol](docs/r04/probe-protocol.md)
+- [R04 dependency review](docs/r04/dependencies.md)
+- [R04 execution and R05 handoff](docs/r04/STATUS.md)
 - [Repository decision](docs/decisions/0001-separate-repository.md)
 - [Technical/dependency decisions](docs/r00/decisions.md)
 - [905-row parity ledger](docs/r00/parity-ledger.csv)
@@ -59,4 +65,4 @@ cargo test --workspace --locked
 ```
 
 The opt-in differential bridges and their explicit Go checkout are documented
-in the R01, R02 and R03 probe protocols.
+in the R01, R02, R03 and R04 probe protocols.

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/otuschhoff/rados-go.git",
+  "source_commit": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+  "source_path": "integration/p03/legacy-crush.txt",
+  "destination_path": "integration/r04/legacy-crush.txt",
+  "sha256": "5b07d221477e01a50ad37ab113cb8511ada2895bd3e848504518d0ef634f13ea"
+}

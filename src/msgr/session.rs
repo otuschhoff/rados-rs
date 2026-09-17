@@ -160,7 +160,7 @@ pub(crate) enum Effect {
     Terminal(SessionError),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Snapshot {
     pub(crate) state: State,
     pub(crate) generation: u64,
@@ -169,6 +169,9 @@ pub(crate) struct Snapshot {
     pub(crate) next_transaction_id: u64,
     pub(crate) client_cookie: u64,
     pub(crate) server_cookie: u64,
+    pub(crate) server_global_id: i64,
+    pub(crate) server_addresses: super::super::protocol::address::EntityAddrVec,
+    pub(crate) server_features: u64,
     pub(crate) global_sequence: u64,
     pub(crate) connect_sequence: u64,
     pub(crate) queued: usize,
@@ -228,6 +231,9 @@ pub(crate) struct Machine {
     next_transaction_id: Option<u64>,
     client_cookie: u64,
     server_cookie: u64,
+    server_global_id: i64,
+    server_addresses: super::super::protocol::address::EntityAddrVec,
+    server_features: u64,
     global_sequence: u64,
     connect_sequence: u64,
     authenticated_global_id: u64,
@@ -285,6 +291,9 @@ impl Machine {
             next_transaction_id: Some(1),
             client_cookie,
             server_cookie,
+            server_global_id: 0,
+            server_addresses: super::super::protocol::address::EntityAddrVec(Vec::new()),
+            server_features: 0,
             global_sequence,
             connect_sequence,
             authenticated_global_id: 0,
@@ -421,6 +430,9 @@ impl Machine {
             next_transaction_id: self.next_transaction_id.unwrap_or(0),
             client_cookie: self.client_cookie,
             server_cookie: self.server_cookie,
+            server_global_id: self.server_global_id,
+            server_addresses: self.server_addresses.clone(),
+            server_features: self.server_features,
             global_sequence: self.global_sequence,
             connect_sequence: self.connect_sequence,
             queued: self.pending.iter().filter(|pending| !pending.sent).count(),
@@ -835,6 +847,9 @@ impl Machine {
             return;
         }
         self.server_cookie = ident.cookie;
+        self.server_global_id = ident.global_id;
+        self.server_addresses = ident.addresses.clone();
+        self.server_features = ident.supported_features;
         self.server_flags = ident.flags;
         self.fail_sent_unknown(effects);
         if self.complete_renewal(effects) {
@@ -1341,7 +1356,11 @@ mod tests {
         assert!(machine.in_flight_count() <= machine.config.max_in_flight_transactions);
         assert_eq!(
             machine.retained_bytes,
-            machine.pending.iter().map(|pending| pending.bytes).sum()
+            machine
+                .pending
+                .iter()
+                .map(|pending| pending.bytes)
+                .sum::<u64>()
         );
         assert!(machine.retained_bytes <= machine.config.max_retained_bytes);
         for pending in &machine.pending {

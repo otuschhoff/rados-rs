@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {"type": "CephXServerChallenge", "test_instance": 0, "hex": "010100000000000000"},
+    {"type": "CephXResponseHeader", "test_instance": 0, "hex": "010000000000"},
+    {"type": "CephXTicketBlob", "test_instance": 0, "hex": "017b000000000000000e00000074686973206973206120626c6f62"},
+    {"type": "CryptoKey", "test_instance": 0, "hex": "01007b000000c8010000100031323334353637383930313233343536"}
+  ]
+}

@@ -198,7 +198,7 @@ impl SecureCodec {
         }
     }
 
-    async fn read_async(
+    pub(crate) async fn read_async(
         &mut self,
         reader: &mut (impl AsyncRead + Unpin),
         limits: Limits,

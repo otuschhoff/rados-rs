@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "vectors": {
+    "ceph_aes_cbc": {
+      "key_hex": "31323334353637383930313233343536",
+      "plaintext_hex": "616263",
+      "ciphertext_hex": "0ba3d1290cc47bb370aa355b24a7d152"
+    },
+    "rfc8009_aes256": {
+      "key_usage": 2,
+      "key_hex": "6d404d37faf79f9df0d33568d320669800eb4836472ea8a026d16b7182460c52",
+      "ciphertext_hex": "4ed7b37c2bcac8f74f23c1cf07e62bc7b75fb3f637b9f559c7f664f69eab7b6092237526ea0d1f61cb20d69d10f2",
+      "plaintext_hex": "000102030405"
+    },
+    "aes256_challenge": {
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "server_challenge": 1234605616436508552,
+      "client_challenge": 72623859790382856,
+      "result_hex_le": "044bebe5403060ff"
+    }
+  }
+}

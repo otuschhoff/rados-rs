@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 use crate::protocol::features::GlobalFeatures;
 use crate::wire::{Decoder, Encoder, WireError};
 
@@ -37,6 +39,38 @@ impl PartialEq for EntityAddr {
 impl Eq for EntityAddr {}
 
 impl EntityAddr {
+    pub(crate) fn ipv4_v2(endpoint: SocketAddr) -> Result<Self, WireError> {
+        let SocketAddr::V4(endpoint) = endpoint else {
+            return Err(WireError::Malformed);
+        };
+        let mut socket_data = vec![0; 14];
+        socket_data[..2].copy_from_slice(&endpoint.port().to_be_bytes());
+        socket_data[2..6].copy_from_slice(&endpoint.ip().octets());
+        Ok(Self {
+            address_type: AddressType::V2,
+            nonce: 0,
+            family: AF_INET,
+            socket_data,
+            legacy_encoding: false,
+        })
+    }
+
+    pub(crate) fn endpoint(&self) -> Option<SocketAddr> {
+        let port = u16::from_be_bytes(self.socket_data.get(..2)?.try_into().ok()?);
+        match self.family {
+            AF_INET => Some(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(
+                    self.socket_data[2],
+                    self.socket_data[3],
+                    self.socket_data[4],
+                    self.socket_data[5],
+                )),
+                port,
+            )),
+            _ => None,
+        }
+    }
+
     pub(crate) fn decode(decoder: &mut Decoder<'_>) -> Result<Self, WireError> {
         let marker = decoder.u8();
         decoder.finish()?;
@@ -231,21 +265,13 @@ impl EntityAddrVec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::net::{Ipv6Addr, SocketAddr};
 
     fn endpoint(address: &EntityAddr) -> Option<SocketAddr> {
-        let port = u16::from_be_bytes([address.socket_data[0], address.socket_data[1]]);
         match address.family {
-            AF_INET => Some(SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(
-                    address.socket_data[2],
-                    address.socket_data[3],
-                    address.socket_data[4],
-                    address.socket_data[5],
-                )),
-                port,
-            )),
+            AF_INET => address.endpoint(),
             AF_INET6 => {
+                let port = u16::from_be_bytes([address.socket_data[0], address.socket_data[1]]);
                 let bytes: [u8; 16] = address.socket_data[6..22].try_into().ok()?;
                 Some(SocketAddr::new(IpAddr::V6(Ipv6Addr::from(bytes)), port))
             }

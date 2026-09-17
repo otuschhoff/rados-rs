@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "fixture": "crypto-vectors.json",
+  "sha256": "9baad25768d0d32c238cb1c98bc2d6c08f66f84dde724b92b5d518dce50b4591",
+  "kind": "synthetic",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/auth/Crypto.h", "src/auth/Crypto.cc", "src/auth/cephx/CephxProtocol.cc"],
+    "files": {
+      "src/auth/Crypto.h": "b4e5e3b74f8b1049492fc09dffc3a8297cd2f38aa128231b4209e77ae8c88c54",
+      "src/auth/Crypto.cc": "17ad1f129765c32f359d3990ba5e30f9e076275bd84c045b9eaea04ee8e9eaf5",
+      "src/auth/cephx/CephxProtocol.cc": "00a046914b2a62af8c0b5b08cd9067f639998c6a5880d955e8a797c3f869531d"
+    },
+    "references": [
+      {"type": "ceph-source", "locator": "https://github.com/ceph/ceph.git", "revision": "7f793731f1b39eb4f465e960113d2363c311b964", "role": "CephX AES-CBC and challenge behavior"},
+      {"type": "rfc", "locator": "https://www.rfc-editor.org/rfc/rfc8009", "revision": "RFC 8009 section A", "role": "published AES256-CTS-HMAC-SHA384-192 test vector"},
+      {"type": "openssl-runtime", "locator": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9", "revision": "OpenSSL 3.5.7", "role": "independent AES-128-CBC runtime result"},
+      {"type": "local-oracle", "locator": "integration/p03/rfc8009-oracle/main.go", "revision": "sha256:acd8b9a14e8bfb7b43b9fcdbbf1ed6331f4df1b32bc64acf9b6ffa17823fdda8", "role": "standard-library RFC 8009 verification"},
+      {"type": "production-dependency", "locator": "https://github.com/otuschhoff/gokrb5", "revision": "v8.5.3", "role": "production RFC 8009 implementation compared with the independent oracle"}
+    ]
+  },
+  "generator": {
+    "tool": "RFC 8009 test vector and OpenSSL 3.5.7",
+    "version": "RFC 8009 section A; OpenSSL 3.5.7",
+    "command": ["./integration/p03/reproduce-fixtures.sh"],
+    "image": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+  },
+  "import": {
+    "repository": "https://github.com/otuschhoff/rados-go.git",
+    "commit": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+    "path": "testdata/p03/crypto-vectors.json"
+  },
+  "secrets": {"contains_secrets": false, "synthetic_only": true},
+  "license": {"upstream_expression": "RFC-REFERENCE AND Apache-2.0", "redistribution": "approved", "reviewed_by": "Oliver Tuschhoff"}
+}

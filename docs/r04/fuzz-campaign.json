@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "task-validation",
+  "certifying": false,
+  "recorded_at_utc": "2026-09-17",
+  "host": "aarch64-apple-darwin",
+  "budget_seconds_per_target": 60,
+  "command_template": "cd fuzz && cargo fuzz run <target> /tmp/rados-r04-fuzz/corpus/<target> -- -max_total_time=60 -print_final_stats=1",
+  "corpus_setup": "integration/r04/prepare-fuzz-corpus.sh /tmp/rados-r04-fuzz/corpus",
+  "toolchain": {
+    "rustup": "nightly-2026-09-01",
+    "rustc": "rustc 1.100.0-nightly (0dfb098f3 2026-08-31)",
+    "rustc_commit": "0dfb098f3aeecbe38c2566ca090193280e7349e7c",
+    "llvm": "23.1.0",
+    "cargo": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
+    "cargo_fuzz": "0.13.2",
+    "libfuzzer_sys": "0.4.13"
+  },
+  "bound_sources": {
+    "integration/r04/prepare-fuzz-corpus.sh": "9c8e1620f6ec70519b9ec18c64aca79c06b2eece67a51f6bf4179180a554a00a",
+    "fuzz/Cargo.lock": "4e7b1e21a984c53b27751a00f0d7b54f5c8ff26c67a6a186fbe6339af599d94e",
+    "fuzz/Cargo.toml": "323a230d7fb36ef593a273c0c36704624eda71d12e75281b71da6a6d0800ec55",
+    "fuzz/src/lib.rs": "f011a825f8e0ba952d97b4c05f810036427bbcc37338ef3be948f46065892878",
+    "src/cephx/mod.rs": "d7d78a5fe33418fe86fae5c468ec596494b58848ba4a396a1f7924d0e72b465f",
+    "src/cephx/core.rs": "bd4cb0791d1b851a4411a7986a61b63f010ba1ab5ab7a65000b13bb9e476270a",
+    "src/cephx/crypto.rs": "84ca6148860491b7f9054805f8cc3bd4dcf0aa3f3ccee848d24c2d2a4183bc91"
+  },
+  "seed_corpus": {
+    "cephx_auth_session_reply/aes-crc-ticket.bin": "709e80c88487a2411e1ee4dfb9f22a861492d20c4765150c0c794abd70f8147c",
+    "cephx_auth_session_reply/aes-secure-connection.bin": "fbb59ed10e9cd4ff45a12c5bb92cbd80df984ba1fe60f26a30febf218e2f0f5e",
+    "cephx_auth_session_reply/aes256-authenticated-malformed.bin": "836ca85788de13f80246d77e6f4bfb5dc4c10ce7fe60cc9810946063d1f72bbf",
+    "cephx_auth_session_reply/aes256-crc-ticket.bin": "fb50dc0717ff266cf9baf82b1ce7a1c2ef6d9247859680b11a19fb7077f5f222",
+    "cephx_auth_session_reply/aes256-secure-connection.bin": "75c8fd04ad916aec3e3d5cb76a452b116b3d4d0912a0a485e9fb8e3d240e210c",
+    "cephx_authorizer/aes-challenge.bin": "b413f47d13ee2fe6c845b2ee141af81de858df4ec549a58b7970bb96645bc8d2",
+    "cephx_authorizer/aes-reply.bin": "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+    "cephx_authorizer/aes256-authenticated-malformed.bin": "af794af82cbb7e2a5b92f03e245a5f0effd86ea753bf3c37a99524dc8fc9bf0a",
+    "cephx_authorizer/aes256-challenge.bin": "9dcf97a184f32623d11a73124ceb99a5709b083721e878a16d78f596718ba7b2",
+    "cephx_authorizer/aes256-reply.bin": "47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+    "cephx_credentials/parse-key-aes.bin": "abe0007e4f0ad75ff7124000a93c24e2edaf6991fbe8121475502927a9979e50",
+    "cephx_credentials/parse-key-aes256.bin": "57e1362e96eb205c6207634ef3e49b1b0cb7065c9664f1681810c86a3f9bda9a",
+    "cephx_credentials/parse-keyring-aes.bin": "14a1a0852f6620a5081b3f4f9331c8620d9caf47e664c8e33bc536b146b2e4ca",
+    "cephx_credentials/parse-keyring-aes256.bin": "50a6067d47f46ebd3bc03f8d0db6ea20d516009a3b5cd1a7e0a7d7faea2f58de",
+    "cephx_server_challenge/malformed.bin": "ca66882b2aacc5b00b7b59c586b283c3f885714499323f726d32c0799df1e3dc",
+    "cephx_server_challenge/p03-server-challenge.bin": "46f8ec5a439c92e1df8299e1a4432a7ee172d8496b5e33e0a35a7b67163371b5"
+  },
+  "targets": [
+    {
+      "name": "cephx_credentials",
+      "harness_sha256": "fba242244736a027ddc1334d3bfaff4f25a76047147bbdc26000fd21104e22f3",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 10456042,
+      "average_executions_per_second": 171410,
+      "new_units_added": 4865,
+      "peak_rss_mb": 696,
+      "raw_output_sha256": "0f308ce36f939c0465a1f5334bc4368371b614a73159cdd65ae7555c1059a34c"
+    },
+    {
+      "name": "cephx_server_challenge",
+      "harness_sha256": "1c23756c5f8b13deb0fa64fbb90d009ca2efda403be27000bf37cc56ea05c137",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 34335361,
+      "average_executions_per_second": 562874,
+      "new_units_added": 2,
+      "peak_rss_mb": 581,
+      "raw_output_sha256": "2306cc1107355f457f1197a6ff8a0203d550adc4571703b125ff71698a209c79"
+    },
+    {
+      "name": "cephx_auth_session_reply",
+      "harness_sha256": "2d5e37016597d612bb498906117412bbef67792c08456b3d4a670245b655f9fe",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 1700780,
+      "average_executions_per_second": 27881,
+      "new_units_added": 332,
+      "peak_rss_mb": 625,
+      "raw_output_sha256": "043be647cc432f33921a37cb119a4cb21085fc141dc8f2f2cec0a0b3e0a8368f"
+    },
+    {
+      "name": "cephx_authorizer",
+      "harness_sha256": "10f5cc291a76803b0d1b4a4b3150f5a56af414cfabfd0dcdfe0c1129b8a8a5d2",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 2303392,
+      "average_executions_per_second": 37760,
+      "new_units_added": 258,
+      "peak_rss_mb": 631,
+      "raw_output_sha256": "4d55c16f980cd4c065a5ae6e2ca62b78b6a5d85bcc58292e8d32fbcab90c54da"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
@@ -17,6 +18,7 @@ pub(crate) struct ConnectionSetup {
     pub(crate) codec: Codec,
     pub(crate) authenticated_global_id: Option<u64>,
     pub(crate) credential_identity: Option<[u8; 32]>,
+    pub(crate) renewal_after: Option<Duration>,
 }
 
 pub(crate) type ConnectFuture =
@@ -293,6 +295,7 @@ mod tests {
             }),
             authenticated_global_id: None,
             credential_identity: None,
+            renewal_after: None,
         }
     }
 
@@ -397,10 +400,12 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn renewal_due_reaches_the_owner_machine() {
         let (client, _server) = duplex(256);
-        let session = Session::spawn(machine(4), Some(setup(client)), None);
+        let mut connection = setup(client);
+        connection.renewal_after = Some(Duration::from_secs(10));
+        let session = Session::spawn(machine(4), Some(connection), None);
         assert!(matches!(
             session.next_event().await,
             Some(SessionEvent::StateChanged(
@@ -408,7 +413,7 @@ mod tests {
             ))
         ));
 
-        session.renewal_due().await.expect("queue renewal");
+        tokio::time::advance(Duration::from_secs(10)).await;
         assert_eq!(
             session.next_event().await,
             Some(SessionEvent::CredentialRenewal)
@@ -726,6 +731,7 @@ impl Owner {
                 result,
             },
             TransportEvent::Fault { generation, error } => Input::Fault { generation, error },
+            TransportEvent::RenewalDue { generation } => Input::RenewalDue { generation },
         };
         self.drive(input).await;
     }
@@ -763,6 +769,7 @@ impl Owner {
                 generation,
                 setup.stream,
                 setup.codec,
+                setup.renewal_after,
                 self.machine.limits(),
                 self.transport_events.clone(),
             ),

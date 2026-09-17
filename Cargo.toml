@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -11,6 +11,7 @@ rust-version = "1.98.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)", "cfg(feature, values(\"fuzzing\"))"] }
 
 [workspace.lints.clippy]
 all = "deny"
@@ -34,6 +35,7 @@ include = [
     "/docs/r01/**",
     "/docs/r02/**",
     "/docs/r03/**",
+    "/docs/r04/**",
     "/reference/**",
     "/integration/**",
     "/testdata/README.md",
@@ -51,6 +53,7 @@ include = [
     "/testdata/p01/entity-addrvec-modern.bin",
     "/testdata/p01/entity-addrvec-modern.bin.json",
     "/testdata/p02/**",
+    "/testdata/p03/**",
     "/Cargo.toml",
     "/Cargo.lock",
     "/LICENSE",
@@ -62,11 +65,27 @@ include = [
 [lib]
 name = "rados"
 
+[features]
+r04-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
+
+[[bin]]
+name = "rados-r04-live"
+path = "src/bin/rados-r04-live.rs"
+required-features = ["r04-integration"]
+
 [dependencies]
+aes = "=0.9.3"
 aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
+base64 = "=0.22.1"
+cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
-tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync"] }
-zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
+getrandom = "=0.4.3"
+hmac = "=0.13.0"
+sha2 = "=0.11.0"
+serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
+tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync", "test-util"] }

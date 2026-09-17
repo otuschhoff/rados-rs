@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+#[allow(dead_code)]
+mod cephx;
 mod client;
 mod config;
 mod error;
@@ -7,6 +9,9 @@ mod identity;
 #[allow(dead_code)]
 mod msgr;
 mod operation;
+#[cfg(feature = "r04-integration")]
+#[doc(hidden)]
+pub mod r04_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool};

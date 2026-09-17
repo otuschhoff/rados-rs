@@ -9,6 +9,10 @@ mod wire {
     pub(crate) use crc::crc32c;
 }
 
+mod cephx {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/cephx/mod.rs"));
+}
+
 mod protocol {
     pub(crate) mod features {
         include!(concat!(
@@ -67,6 +71,7 @@ use msgr::secure::SecureCodec;
 use msgr::session::{Config, Effect, Input, Machine, ReconnectPolicy, SessionError};
 use protocol::address::{EntityAddr, EntityAddrVec};
 use std::io::Cursor;
+use std::time::Duration;
 
 const FUZZ_LIMITS: Limits = Limits {
     max_segment_bytes: 256,
@@ -76,6 +81,9 @@ const FUZZ_LIMITS: Limits = Limits {
 };
 const MAX_FUZZ_WIRE_BYTES: usize = 2048;
 const MAX_SESSION_SCRIPT_BYTES: usize = 24;
+const MAX_CEPHX_FUZZ_BYTES: usize = 4096;
+const AES_KEY: &str = "AQB7AAAAyAEAABAAMTIzNDU2Nzg5MDEyMzQ1Ng==";
+const AES256_KEY: &str = "AgBm8qdqnvU7HiAAg6prN8XJ47FG9AprWpB72EwKyLfFC7UgnMYvcnFI29M=";
 
 pub fn primitive_decoder(data: &[u8]) {
     let mut decoder = wire::Decoder::new(data, 4_096);
@@ -436,6 +444,309 @@ pub fn bounded_session_scripts(script: &[u8]) {
     }
 }
 
+pub fn cephx_credentials(data: &[u8]) {
+    let Some((&operation, input)) = data.split_first() else {
+        return;
+    };
+    if input.len() > MAX_CEPHX_FUZZ_BYTES {
+        return;
+    }
+    if operation & 1 == 0 {
+        if let Ok(encoded) = std::str::from_utf8(input) {
+            let _ = cephx::parse_key("client.fuzz", encoded, MAX_CEPHX_FUZZ_BYTES);
+        }
+    } else {
+        let _ = cephx::parse_keyring(input, "client.fuzz", MAX_CEPHX_FUZZ_BYTES);
+    }
+}
+
+pub fn cephx_server_challenge(data: &[u8]) {
+    if data.len() <= MAX_CEPHX_FUZZ_BYTES {
+        let _ = cephx::core::parse_server_challenge(data, cephx_limits());
+    }
+}
+
+pub fn cephx_auth_session_reply(data: &[u8]) {
+    if data.len() > MAX_CEPHX_FUZZ_BYTES {
+        return;
+    }
+    let limits = cephx_limits();
+    let raw_key = cephx_key(data.first().copied().unwrap_or_default());
+    let raw_mode = if data.get(1).copied().unwrap_or_default() & 1 == 0 {
+        cephx::core::CONNECTION_MODE_CRC
+    } else {
+        cephx::core::CONNECTION_MODE_SECURE
+    };
+    let _ = cephx::core::parse_auth_session_reply(
+        data,
+        &raw_key,
+        None,
+        raw_mode,
+        Duration::from_secs(100),
+        limits,
+    );
+
+    let [key_selector, mode_selector, path_selector, mutation @ ..] = data else {
+        return;
+    };
+    let principal = cephx_key(*key_selector);
+    let session = cephx_key(*key_selector >> 1);
+    let mode = if mode_selector & 1 == 0 {
+        cephx::core::CONNECTION_MODE_CRC
+    } else {
+        cephx::core::CONNECTION_MODE_SECURE
+    };
+    let mut service_plaintext = service_ticket_plaintext(&session, limits);
+    let mut connection_plaintext = connection_secret_plaintext(limits);
+    match path_selector % 3 {
+        0 => service_plaintext = mutate_plaintext(&service_plaintext, mutation),
+        1 => connection_plaintext = mutate_plaintext(&connection_plaintext, mutation),
+        _ => return,
+    }
+    let Some(payload) = auth_session_payload(
+        &principal,
+        &session,
+        &service_plaintext,
+        if path_selector % 3 == 1 {
+            Some(&connection_plaintext)
+        } else {
+            None
+        },
+        limits,
+    ) else {
+        return;
+    };
+    let parsed = cephx::core::parse_auth_session_reply(
+        &payload,
+        &principal,
+        None,
+        mode,
+        Duration::from_secs(100),
+        limits,
+    );
+    if mutation.is_empty() && (path_selector % 3 == 0 || mode == cephx::core::CONNECTION_MODE_SECURE)
+    {
+        parsed.expect("constructed authenticated session reply must parse");
+    }
+}
+
+pub fn cephx_authorizer(data: &[u8]) {
+    if data.len() > MAX_CEPHX_FUZZ_BYTES {
+        return;
+    }
+    let limits = cephx_limits();
+    let key = cephx_key(data.first().copied().unwrap_or_default());
+    let authorizer = cephx::core::Authorizer {
+        base: vec![1, 2, 3],
+        payload: vec![4, 5],
+        nonce: 1,
+        service_id: cephx::core::SERVICE_MONITOR,
+    };
+    let _ = cephx::core::verify_authorizer_reply(data, &key, authorizer.nonce, limits);
+    let _ = cephx::core::add_authorizer_challenge(
+        &authorizer,
+        data,
+        &key,
+        Some(&[0x41; 16]),
+        limits,
+    );
+
+    let [key_selector, operation, mutation @ ..] = data else {
+        return;
+    };
+    let key = cephx_key(*key_selector);
+    if operation & 1 == 0 {
+        let mut plaintext = wire::Encoder::new(limits.max_auth_bytes);
+        plaintext.u8(2);
+        plaintext.u64(authorizer.nonce.wrapping_add(1));
+        plaintext.bytes(&[0x5a; cephx::core::CONNECTION_SECRET_SIZE_SECURE]);
+        let plaintext = mutate_plaintext(
+            &plaintext.finish().expect("bounded authorizer reply"),
+            mutation,
+        );
+        let Ok(encrypted) = cephx::crypto::encrypt_with_magic(
+            &key,
+            &plaintext,
+            cephx::crypto::KEY_USAGE_AUTHORIZE_REPLY,
+            Some(&[0x42; 16]),
+            limits,
+        ) else {
+            return;
+        };
+        let mut payload = wire::Encoder::new(limits.max_auth_bytes);
+        payload.bytes(&encrypted);
+        let Ok(payload) = payload.finish() else {
+            return;
+        };
+        let verified = cephx::core::verify_authorizer_reply(
+            &payload,
+            &key,
+            authorizer.nonce,
+            limits,
+        );
+        if mutation.is_empty() {
+            verified.expect("constructed authenticated authorizer reply must parse");
+        }
+    } else {
+        let mut plaintext = wire::Encoder::new(limits.max_auth_bytes);
+        plaintext.u8(1);
+        plaintext.u64(0x1122_3344_5566_7788);
+        let plaintext = mutate_plaintext(
+            &plaintext.finish().expect("bounded authorizer challenge"),
+            mutation,
+        );
+        let Ok(challenge) = cephx::crypto::encrypt_with_magic(
+            &key,
+            &plaintext,
+            cephx::crypto::KEY_USAGE_AUTHORIZE_CHALLENGE,
+            Some(&[0x43; 16]),
+            limits,
+        ) else {
+            return;
+        };
+        let challenged = cephx::core::add_authorizer_challenge(
+            &authorizer,
+            &challenge,
+            &key,
+            Some(&[0x44; 16]),
+            limits,
+        );
+        if mutation.is_empty() {
+            challenged.expect("constructed authenticated authorizer challenge must parse");
+        }
+    }
+}
+
+fn cephx_limits() -> cephx::crypto::Limits {
+    cephx::crypto::Limits {
+        max_auth_bytes: MAX_CEPHX_FUZZ_BYTES,
+        max_ticket_blob_bytes: 256,
+        max_decrypt_bytes: MAX_CEPHX_FUZZ_BYTES,
+        max_encrypt_bytes: MAX_CEPHX_FUZZ_BYTES,
+        max_connection_secret_bytes: cephx::core::CONNECTION_SECRET_SIZE_SECURE,
+        max_tickets: 4,
+    }
+}
+
+fn cephx_key(selector: u8) -> cephx::CryptoKey {
+    cephx::parse_key(
+        "client.fuzz",
+        if selector & 1 == 0 { AES_KEY } else { AES256_KEY },
+        64,
+    )
+    .expect("fixed CephX key must parse")
+    .secret()
+    .clone()
+}
+
+fn mutate_plaintext(seed: &[u8], mutation: &[u8]) -> Vec<u8> {
+    let Some((&strategy, bytes)) = mutation.split_first() else {
+        return seed.to_vec();
+    };
+    match strategy % 3 {
+        0 => bytes.to_vec(),
+        1 => {
+            let mut value = seed.to_vec();
+            value.extend_from_slice(bytes);
+            value
+        }
+        _ => {
+            let mut value = seed.to_vec();
+            for (index, byte) in bytes.iter().copied().enumerate() {
+                if value.is_empty() {
+                    value.push(byte);
+                } else {
+                    let offset = index % value.len();
+                    value[offset] ^= byte;
+                }
+            }
+            value
+        }
+    }
+}
+
+fn encrypted_envelope(
+    key: &cephx::CryptoKey,
+    plaintext: &[u8],
+    usage: u32,
+    limits: cephx::crypto::Limits,
+) -> Option<Vec<u8>> {
+    let encrypted = cephx::crypto::encrypt_with_magic(
+        key,
+        plaintext,
+        usage,
+        Some(&[u8::try_from(usage).expect("CephX key usage fits u8"); 16]),
+        limits,
+    )
+    .ok()?;
+    let mut envelope = wire::Encoder::new(limits.max_auth_bytes);
+    envelope.bytes(&encrypted);
+    envelope.finish().ok()
+}
+
+fn service_ticket_plaintext(
+    session: &cephx::CryptoKey,
+    limits: cephx::crypto::Limits,
+) -> Vec<u8> {
+    let mut plaintext = wire::Encoder::new(limits.max_auth_bytes);
+    plaintext.u8(1);
+    plaintext.u16(session.type_id());
+    plaintext.u32(0);
+    plaintext.u32(0);
+    plaintext.u16(u16::try_from(session.bytes().len()).expect("fixed key length"));
+    plaintext.raw(session.bytes());
+    plaintext.u32(60);
+    plaintext.u32(0);
+    plaintext.finish().expect("bounded service ticket")
+}
+
+fn connection_secret_plaintext(limits: cephx::crypto::Limits) -> Vec<u8> {
+    let mut plaintext = wire::Encoder::new(limits.max_auth_bytes);
+    plaintext.bytes(&[0x33; cephx::core::CONNECTION_SECRET_SIZE_SECURE]);
+    plaintext.finish().expect("bounded connection secret")
+}
+
+fn auth_session_payload(
+    principal: &cephx::CryptoKey,
+    session: &cephx::CryptoKey,
+    service_plaintext: &[u8],
+    connection_plaintext: Option<&[u8]>,
+    limits: cephx::crypto::Limits,
+) -> Option<Vec<u8>> {
+    let service = encrypted_envelope(
+        principal,
+        service_plaintext,
+        cephx::crypto::KEY_USAGE_TICKET_SESSION_KEY,
+        limits,
+    )?;
+    let mut ticket = wire::Encoder::new(limits.max_auth_bytes);
+    ticket.u8(1);
+    ticket.u64(7);
+    ticket.bytes(b"fuzz-ticket");
+
+    let mut reply = wire::Encoder::new(limits.max_auth_bytes);
+    reply.u16(0x0100);
+    reply.i32(0);
+    reply.u8(1);
+    reply.u32(1);
+    reply.u32(cephx::core::SERVICE_AUTH);
+    reply.u8(1);
+    reply.raw(&service);
+    reply.u8(0);
+    reply.bytes(&ticket.finish().expect("bounded ticket blob"));
+    if let Some(plaintext) = connection_plaintext {
+        let connection = encrypted_envelope(
+            session,
+            plaintext,
+            cephx::crypto::KEY_USAGE_AUTH_CONNECTION_SECRET,
+            limits,
+        )?;
+        reply.bytes(&connection);
+        reply.bytes(&[]);
+    }
+    reply.finish().ok()
+}
+
 fn session_message(payload: &[u8]) -> Message {
     Message {
         lengths: MessageLengths {
@@ -483,6 +794,26 @@ fn session_config() -> Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cephx_harnesses_reach_all_key_and_mode_variants() {
+        super::cephx_credentials(format!("\0{}", super::AES_KEY).as_bytes());
+        super::cephx_credentials(
+            format!("\x01[client.fuzz]\nkey = {}\n", super::AES256_KEY).as_bytes(),
+        );
+        super::cephx_server_challenge(&[1, 1, 0, 0, 0, 0, 0, 0, 0]);
+        for principal_key in 0..=1 {
+            for session_key in 0..=1 {
+                let key_selector = principal_key | (session_key << 1);
+                for mode in 0..=1 {
+                    super::cephx_auth_session_reply(&[key_selector, mode, 0]);
+                    super::cephx_auth_session_reply(&[key_selector, mode, 1]);
+                }
+            }
+            super::cephx_authorizer(&[principal_key, 0]);
+            super::cephx_authorizer(&[principal_key, 1]);
+        }
+    }
+
     #[test]
     fn retained_go_session_seed_regresses() {
         // Extracted from internal/msgr/testdata/fuzz/FuzzSessionScript/938f779fb2101a93.

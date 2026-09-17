@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "fixture": "cephx-encoding-vectors.json",
+  "sha256": "6b7c66e654f2f11a2effa2c51119b4cdcf19eba642952d8eaa292de3182f1cc4",
+  "kind": "upstream-derived",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/auth/cephx/CephxProtocol.h", "src/auth/Crypto.h", "src/auth/Crypto.cc"],
+    "files": {
+      "src/auth/cephx/CephxProtocol.h": "563822ae66e9bf6c040980717d4e7db4f30b186dc7cc9e597fd0f10152e9fbd1",
+      "src/auth/Crypto.h": "b4e5e3b74f8b1049492fc09dffc3a8297cd2f38aa128231b4209e77ae8c88c54",
+      "src/auth/Crypto.cc": "17ad1f129765c32f359d3990ba5e30f9e076275bd84c045b9eaea04ee8e9eaf5"
+    },
+    "references": [{
+      "type": "ceph-source",
+      "locator": "https://github.com/ceph/ceph.git",
+      "revision": "7f793731f1b39eb4f465e960113d2363c311b964",
+      "role": "wire structures and ceph-dencoder fixture generation"
+    }]
+  },
+  "generator": {
+    "tool": "ceph-dencoder",
+    "version": "ceph version 20.2.4",
+    "command": ["./integration/p03/reproduce-fixtures.sh"],
+    "image": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+  },
+  "import": {
+    "repository": "https://github.com/otuschhoff/rados-go.git",
+    "commit": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+    "path": "testdata/p03/cephx-encoding-vectors.json"
+  },
+  "secrets": {"contains_secrets": false, "synthetic_only": true},
+  "license": {"upstream_expression": "LGPL-2.1-or-later", "redistribution": "approved", "reviewed_by": "Oliver Tuschhoff"}
+}

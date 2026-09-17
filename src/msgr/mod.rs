@@ -1,11 +1,11 @@
-mod banner;
-mod control;
-mod frame;
+pub(crate) mod banner;
+pub(crate) mod control;
+pub(crate) mod frame;
 mod message;
-mod secure;
-mod session;
-mod supervisor;
-mod transport;
+pub(crate) mod secure;
+pub(crate) mod session;
+pub(crate) mod supervisor;
+pub(crate) mod transport;
 
 #[cfg(test)]
 mod fixture_tests;

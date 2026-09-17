@@ -7,11 +7,24 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+default = ["fuzzing"]
+fuzzing = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)", "cfg(feature, values(\"fuzzing\"))"] }
+
 [dependencies]
+aes = "=0.9.3"
 aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
+base64 = "=0.22.1"
+cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
+hmac = "=0.13.0"
 libfuzzer-sys = "=0.4.13"
+sha2 = "=0.11.0"
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
 [[bin]]
 name = "primitive_decoder"
@@ -79,6 +92,34 @@ bench = false
 [[bin]]
 name = "bounded_session_scripts"
 path = "fuzz_targets/bounded_session_scripts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cephx_credentials"
+path = "fuzz_targets/cephx_credentials.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cephx_server_challenge"
+path = "fuzz_targets/cephx_server_challenge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cephx_auth_session_reply"
+path = "fuzz_targets/cephx_auth_session_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cephx_authorizer"
+path = "fuzz_targets/cephx_authorizer.rs"
 test = false
 doc = false
 bench = false

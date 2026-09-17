@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otuschhoff/rados-rs/integration/r04/live-report.schema.json",
+  "title": "rados-rs R04 disposable live monitor evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "command", "started_at", "finished_at", "source", "server", "cluster", "scenarios", "negative_observations", "probe"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite_id": {"const": "r04/live-monitor-v1"},
+    "status": {"const": "passed"},
+    "command": {"const": "integration/r04/live-reproduce.sh"},
+    "started_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "finished_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "revision", "dirty", "identity", "artifacts"],
+      "properties": {
+        "repository": {"const": "https://github.com/otuschhoff/rados-rs"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "dirty": {"type": "boolean"},
+        "identity": {"const": "content-addressed-artifacts"},
+        "artifacts": {"type": "object", "minProperties": 10, "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "source_anchor_commit", "version", "image", "platform", "host_platform", "runtime_package", "monitor_binary_sha256"],
+      "properties": {
+        "repository": {"const": "https://github.com/ceph/ceph.git"},
+        "source_anchor_commit": {"const": "7f793731f1b39eb4f465e960113d2363c311b964"},
+        "version": {"const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable - RelWithDebInfo)"},
+        "image": {"const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"},
+        "platform": {"const": "linux/arm64"},
+        "host_platform": {"const": "linux/arm64"},
+        "runtime_package": {"type": "string", "minLength": 1},
+        "monitor_binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "cluster": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fsid", "network", "monitor", "client", "monitor_name", "client_entity", "external_config", "ticket_ttl_seconds"],
+      "properties": {
+        "fsid": {"const": "41111111-2222-4333-8444-555555555555"},
+        "network": {"const": "172.30.94.0/24"},
+        "monitor": {"const": "v2:172.30.94.10:3300"},
+        "client": {"const": "172.30.94.20"},
+        "monitor_name": {"const": "a"},
+        "client_entity": {"const": "client.r04"},
+        "external_config": {"const": false},
+        "ticket_ttl_seconds": {"const": 4}
+      }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["secure_authentication", "client_server_ident", "same_session_renewal", "global_id_reuse", "ticket_rotation", "expired_ticket_rejection", "post_expiry_fresh_global_id", "valid_wrong_key_rejection", "secure_default_downgrade_rejection"],
+      "properties": {
+        "secure_authentication": {"const": "passed"}, "client_server_ident": {"const": "passed"},
+        "same_session_renewal": {"const": "passed"}, "global_id_reuse": {"const": "passed"},
+        "ticket_rotation": {"const": "passed"}, "expired_ticket_rejection": {"const": "passed"},
+        "post_expiry_fresh_global_id": {"const": "passed"}, "valid_wrong_key_rejection": {"const": "passed"},
+        "secure_default_downgrade_rejection": {"const": "passed"}
+      }
+    },
+    "negative_observations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wrong_key", "downgrade"],
+      "properties": {"wrong_key": {"const": "cephx authentication rejected"}, "downgrade": {"const": "cephx auth downgrade rejected"}}
+    },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authenticated_mode", "global_id", "reconnected", "ticket_renewed", "initial_ticket_sha256", "renewed_ticket_sha256", "expiry_rejected", "expired_reconnect", "renewed_global_id", "post_expiry_global_id", "server_global_id", "server_addresses", "server_features", "server_cookie"],
+      "properties": {
+        "authenticated_mode": {"const": "secure"}, "global_id": {"type": "integer", "minimum": 1},
+        "reconnected": {"const": true}, "ticket_renewed": {"const": true},
+        "initial_ticket_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "renewed_ticket_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "expiry_rejected": {"const": true}, "expired_reconnect": {"const": true},
+        "renewed_global_id": {"type": "integer", "minimum": 1}, "post_expiry_global_id": {"type": "integer", "minimum": 1},
+        "server_global_id": {"type": "integer", "minimum": 0},
+        "server_addresses": {"type": "array", "minItems": 1, "contains": {"const": "172.30.94.10:3300"}},
+        "server_features": {"type": "integer", "minimum": 0}, "server_cookie": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

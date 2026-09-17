@@ -20,7 +20,10 @@ wildcards = "deny"
 highlight = "all"
 allow = []
 deny = []
-skip = []
+skip = [
+	{ crate = "syn@2.0.119", reason = "Tokio macros remain on syn 2 while the exact Serde derive pin uses syn 3; both are build-time proc macros." },
+	{ crate = "windows-sys@0.59.0", reason = "Tokio 1.47 retains this target-only shim while mio/socket2 use 0.61; R04 is qualified on macOS and linux/arm64." },
+]
 skip-tree = []
 
 [sources]

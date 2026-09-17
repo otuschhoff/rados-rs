@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
@@ -81,6 +82,9 @@ pub(crate) enum Event {
         generation: u64,
         error: SessionError,
     },
+    RenewalDue {
+        generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -101,6 +105,7 @@ impl Connection {
         generation: u64,
         stream: Box<dyn IoStream>,
         codec: Codec,
+        renewal_after: Option<Duration>,
         limits: Limits,
         events: mpsc::Sender<Event>,
     ) -> Self {
@@ -110,6 +115,8 @@ impl Connection {
         let (close, mut reader_close) = watch::channel(false);
         let mut writer_close = close.subscribe();
         let reader_events = events.clone();
+
+        spawn_renewal(generation, renewal_after, &events, &close);
 
         let reader = tokio::spawn(async move {
             loop {
@@ -224,6 +231,30 @@ impl Connection {
         let _ = self.reader.await;
         let _ = self.writer.await;
     }
+}
+
+fn spawn_renewal(
+    generation: u64,
+    renewal_after: Option<Duration>,
+    events: &mpsc::Sender<Event>,
+    close: &watch::Sender<bool>,
+) {
+    let Some(delay) = renewal_after else {
+        return;
+    };
+    let renewal_events = events.clone();
+    let mut renewal_close = close.subscribe();
+    tokio::spawn(async move {
+        tokio::select! {
+            biased;
+            changed = renewal_close.changed() => {
+                let _ = changed;
+            }
+            () = tokio::time::sleep(delay) => {
+                let _ = renewal_events.send(Event::RenewalDue { generation }).await;
+            }
+        }
+    });
 }
 
 fn map_io_error(error: &io::Error) -> SessionError {
@@ -362,7 +393,8 @@ mod tests {
         let stream = FaultStream::with_read(wire);
         let observer = stream.clone();
         let (events, mut event_rx) = mpsc::channel(4);
-        let connection = Connection::spawn(7, Box::new(stream), Codec::Crc(codec), LIMITS, events);
+        let connection =
+            Connection::spawn(7, Box::new(stream), Codec::Crc(codec), None, LIMITS, events);
 
         let Event::Frame {
             generation,
@@ -401,6 +433,7 @@ mod tests {
             2,
             Box::new(FaultStream::with_read(wire)),
             Codec::Crc(codec),
+            None,
             LIMITS,
             events,
         );
@@ -431,6 +464,7 @@ mod tests {
             3,
             Box::new(FaultStream::with_read(wire)),
             Codec::Secure(Box::new(client)),
+            None,
             LIMITS,
             events,
         );
@@ -459,7 +493,8 @@ mod tests {
             with_data_crc: true,
         };
         let (events, mut event_rx) = mpsc::channel(2);
-        let connection = Connection::spawn(4, Box::new(stream), Codec::Crc(codec), LIMITS, events);
+        let connection =
+            Connection::spawn(4, Box::new(stream), Codec::Crc(codec), None, LIMITS, events);
         connection
             .write(Some(9), frame(b"partial"))
             .await
@@ -482,7 +517,14 @@ mod tests {
             script.block_write = true;
         }
         let (events, _event_rx) = mpsc::channel(1);
-        let connection = Connection::spawn(5, Box::new(blocked), Codec::Crc(codec), LIMITS, events);
+        let connection = Connection::spawn(
+            5,
+            Box::new(blocked),
+            Codec::Crc(codec),
+            None,
+            LIMITS,
+            events,
+        );
         connection
             .write(None, frame(b"blocked"))
             .await
