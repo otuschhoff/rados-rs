@@ -79,15 +79,13 @@ represented as successful evidence.
 Responsible roles are explicit; no person is represented as approving Rust
 without participation. R00 records stop conditions rather than inventing reviews.
 
-## Next Task: R01-T01
+## R01 Handoff
 
-Create the root Cargo workspace with package `rados-rs`, library `rados`, Rust
-1.98.0, edition 2024 and MSRV 1.98.0. Preserve license/notices and reviewed
-package boundaries. Begin with a minimal crate and one bounded P01 fixture
-loader; do not scaffold every module. Use decisions.md and its stop conditions.
+R01 has implemented this handoff; see [R01 status](../r01/STATUS.md). The root
+workspace uses package `rados-rs`, library `rados`, Rust 1.98.0, edition 2024
+and MSRV 1.98.0. License/notices, minimal package boundaries and a bounded P01
+fixture loader are preserved without scaffolding later modules.
 
-First discriminating check: a Rust test reads a P01 vector and independently
-checks expected fields/bytes. Cargo unit tests must work without Go, a sibling
-checkout, Ceph libraries or network. Add Cargo CI only in this repository.
-R01-T02 builds the opt-in bridge against the verified temporary Go reference,
-not moving Go HEAD.
+Rust tests independently check P01 fields/bytes without Go, a sibling checkout,
+Ceph libraries or network. Repository-local CI and the opt-in bridge use an
+explicit temporary Go reference without moving its HEAD.

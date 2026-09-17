@@ -1,0 +1,44 @@
+[workspace]
+members = [".", "tools/r01"]
+default-members = ["."]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "LGPL-2.1-only"
+rust-version = "1.98.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+
+[package]
+name = "rados-rs"
+version = "0.0.0"
+description = "Native Rust client for Ceph RADOS"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/otuschhoff/rados-rs"
+rust-version.workspace = true
+publish = false
+include = [
+    "/src/**",
+    "/testdata/p01/entity-name-client-1.bin",
+    "/testdata/p01/entity-name-client-1.bin.json",
+    "/testdata/p01/entity-name-mon-new.bin",
+    "/testdata/p01/entity-name-mon-new.bin.json",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/README.md",
+    "/THIRD_PARTY_NOTICES",
+]
+
+[lib]
+name = "rados"
+
+[lints]
+workspace = true

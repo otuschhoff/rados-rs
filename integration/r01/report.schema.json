@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otuschhoff/rados-rs/integration/r01/report.schema.json",
+  "title": "rados-rs R01 fixture bridge report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case_id", "operation", "status", "generated_at", "fixture", "bounds", "rust", "go", "controller"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "case_id": {"const": "p01/entity-name-client-1"},
+    "operation": {"const": "entity-name-round-trip"},
+    "status": {"const": "passed"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "fixture": {"$ref": "#/$defs/fixture"},
+    "bounds": {"$ref": "#/$defs/bounds"},
+    "rust": {"$ref": "#/$defs/implementation"},
+    "go": {"$ref": "#/$defs/implementation"},
+    "controller": {"$ref": "#/$defs/controller"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "fixture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "provenance_manifest_sha256", "ceph_image"],
+      "properties": {
+        "path": {"const": "testdata/p01/entity-name-client-1.bin"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "provenance_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "ceph_image": {"type": "string", "pattern": "^quay\\.io/ceph/ceph@sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_record_bytes", "max_input_bytes", "max_output_bytes"],
+      "properties": {
+        "max_record_bytes": {"const": 4096},
+        "max_input_bytes": {"const": 9},
+        "max_output_bytes": {"const": 9}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "case_id", "implementation_id", "operation", "fixture_sha256", "fields", "encoded_base64", "encoded_sha256", "status"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "case_id": {"const": "p01/entity-name-client-1"},
+        "implementation_id": {"enum": ["rust", "go"]},
+        "operation": {"const": "entity-name-round-trip"},
+        "fixture_sha256": {"$ref": "#/$defs/sha256"},
+        "fields": {
+          "type": "object", "additionalProperties": false,
+          "required": ["entity_type", "number"],
+          "properties": {"entity_type": {"const": 8}, "number": {"const": "1"}}
+        },
+        "encoded_base64": {"const": "CAEAAAAAAAAA"},
+        "encoded_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"const": "passed"}
+      }
+    },
+    "implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["implementation_id", "source_revision", "source_tree", "source_files_sha256", "features", "lockfile_sha256", "compiler", "target", "driver_sha256", "command", "exit_code", "stdout_sha256", "result"],
+      "properties": {
+        "implementation_id": {"enum": ["rust", "go"]},
+        "source_revision": {"type": "string", "minLength": 1},
+        "source_tree": {"type": "string", "minLength": 1},
+        "source_files_sha256": {"$ref": "#/$defs/sha256"},
+        "features": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "lockfile_sha256": {"$ref": "#/$defs/sha256"},
+        "compiler": {"type": "string", "minLength": 1},
+        "target": {"type": "string", "minLength": 1},
+        "driver_sha256": {"$ref": "#/$defs/sha256"},
+        "command": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 16},
+        "exit_code": {"const": 0},
+        "stdout_sha256": {"$ref": "#/$defs/sha256"},
+        "result": {"$ref": "#/$defs/result"}
+      }
+    },
+    "controller": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "command"],
+      "properties": {
+        "path": {"const": "integration/r01/reproduce.sh"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "command": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 16}
+      }
+    }
+  }
+}
