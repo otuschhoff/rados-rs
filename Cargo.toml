@@ -1,5 +1,6 @@
 [workspace]
-members = [".", "tools/r01"]
+members = [".", "tools/r01", "tools/r02"]
+exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
 
@@ -26,19 +27,34 @@ rust-version.workspace = true
 publish = false
 include = [
     "/src/**",
+    "/examples/**",
+    "/docs/r02/**",
     "/testdata/p01/entity-name-client-1.bin",
     "/testdata/p01/entity-name-client-1.bin.json",
     "/testdata/p01/entity-name-mon-new.bin",
     "/testdata/p01/entity-name-mon-new.bin.json",
+    "/testdata/p01/entity-addr-ipv4-legacy.bin",
+    "/testdata/p01/entity-addr-ipv4-legacy.bin.json",
+    "/testdata/p01/entity-addr-ipv4-modern.bin",
+    "/testdata/p01/entity-addr-ipv4-modern.bin.json",
+    "/testdata/p01/entity-addr-ipv6-modern.bin",
+    "/testdata/p01/entity-addr-ipv6-modern.bin.json",
+    "/testdata/p01/entity-addrvec-modern.bin",
+    "/testdata/p01/entity-addrvec-modern.bin.json",
     "/Cargo.toml",
     "/Cargo.lock",
     "/LICENSE",
     "/README.md",
+    "/RUST_THIRD_PARTY_NOTICES",
     "/THIRD_PARTY_NOTICES",
 ]
 
 [lib]
 name = "rados"
+
+[dependencies]
+crc32c = "=0.6.8"
+zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "task-validation",
+  "certifying": false,
+  "recorded_at_utc": "2026-09-17",
+  "host": "aarch64-apple-darwin",
+  "budget_seconds_per_target": 60,
+  "command_template": "cargo fuzz run <target> <isolated-corpus> -- -max_total_time=60",
+  "corpus_setup": "For each target, copy every testdata/p01/*.bin file into a new empty target-specific directory.",
+  "toolchain": {
+    "rustup": "nightly-2026-09-01",
+    "rustc": "rustc 1.100.0-nightly (0dfb098f3 2026-08-31)",
+    "rustc_commit": "0dfb098f3aeecbe38c2566ca090193280e7349e7c",
+    "llvm": "23.1.0",
+    "cargo": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
+    "cargo_fuzz": "0.13.2",
+    "libfuzzer_sys": "0.4.13"
+  },
+  "bound_sources": {
+    "fuzz/Cargo.lock": "c49aa57f1263e152a980c3ef4d0379efeca7029ded710fed90e3202b3fe20fe7",
+    "fuzz/Cargo.toml": "5f45f902e3da185f7211b1ab3869cc37386eec9725857a1a1510e0a4536b4955",
+    "fuzz/src/lib.rs": "d93bdbe04134a8bcd84c741ce215121a39e5dfc9ce928de24077a513a59624a0",
+    "src/protocol/address.rs": "f481d8ba03d8d592e9403d5722407edc91103869a1227b429f53577296bd6ae9",
+    "src/protocol/features.rs": "3577d76b8adba382f526cd8afa0fda51e6caa03b18496c5697290c29b87f422d",
+    "src/wire/codec.rs": "1dcae53556dea2f77e602ecfbecef577bd29bf00dc48c1a05ea8f28a0c1f7a4e"
+  },
+  "seed_corpus": {
+    "testdata/p01/entity-addr-ipv4-legacy.bin": "3e0124654f5817281cfaa1b056f14b4128b546ef38994d765b6bb09c00868fbf",
+    "testdata/p01/entity-addr-ipv4-modern.bin": "43c8ed879a7fd14a2d86ac42f0d78d9ae6d5a785f5e60b6658bcba3b3eb2d7e7",
+    "testdata/p01/entity-addr-ipv6-modern.bin": "a5b18e8166e8aa1d0c3285a6c1a3470851ae2bd229b28da857328c3bd2217986",
+    "testdata/p01/entity-addrvec-modern.bin": "f26c6ce30fe8892264a14b6cd5042549d1eee314f921cf8019faf6be9d5c4345",
+    "testdata/p01/entity-name-client-1.bin": "0ea9e19802a23c4674e289fabeaa6e600262fb9ad25ae64fd4fb927651b6abe9",
+    "testdata/p01/entity-name-mon-new.bin": "1272f520cf7ca5cf117a0b5a3116518371bf20fb7fac043ac1be568b8c55b96c"
+  },
+  "targets": [
+    {
+      "name": "primitive_decoder",
+      "harness_sha256": "fad4d9a5094ade3712cc3f3e32dbd2ee3d568cbd76d5bf5554fbcabb8c6b4958",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 49224921,
+      "coverage": 76,
+      "features": 87,
+      "final_corpus_entries": 17,
+      "final_corpus_bytes": 466,
+      "raw_output_sha256": "8cd96f276890e4b880376f1285d5dab79e40aa718ade76ed5693e29af2d0efd9"
+    },
+    {
+      "name": "versioned_envelope",
+      "harness_sha256": "de41742e32a35df4c929b0e6cd772c1d4823883a7319869cb82b24e6eabab5ce",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 52228256,
+      "coverage": 78,
+      "features": 78,
+      "final_corpus_entries": 13,
+      "final_corpus_bytes": 146,
+      "raw_output_sha256": "f325ee60a56e04830a3aad2cf8397c5ca9cb08a6028d0daca39845abc130ee11"
+    },
+    {
+      "name": "entity_address",
+      "harness_sha256": "327ee2566ff1d50882b540cbafd154daeb79698b8f365e10a099b4d13d9436f8",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 38381372,
+      "coverage": 252,
+      "features": 329,
+      "final_corpus_entries": 39,
+      "final_corpus_bytes": 1470,
+      "raw_output_sha256": "5f531cffaa3a58a75d88be0ba5296386c7b0d5d1a6e91aff6fbc14984837799b"
+    },
+    {
+      "name": "entity_address_vector",
+      "harness_sha256": "8e91b392e0892dbbea8e1f051ecb8c30e1159d13930bee254b6b56817240317e",
+      "exit_status": 0,
+      "elapsed_seconds": 61,
+      "executions": 16942667,
+      "coverage": 310,
+      "features": 755,
+      "final_corpus_entries": 86,
+      "final_corpus_bytes": 10301,
+      "raw_output_sha256": "775158f12ec176e062d23938668d2b4d2422c5777bf0e60fabc2531f6b6374b8"
+    }
+  ]
+}

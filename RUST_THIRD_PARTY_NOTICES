@@ -1,0 +1,17 @@
+Rust dependency notices
+=======================
+
+crc32c v0.6.8
+  License: Apache-2.0 OR MIT
+  Copyright: Zack Owens and contributors
+  Source: https://github.com/zowens/crc32c
+
+zeroize v1.8.2
+  License: Apache-2.0 OR MIT
+  Copyright: Tony Arcieri and contributors
+  Source: https://github.com/RustCrypto/utils/tree/master/zeroize
+
+The unpublished evidence tools use base64, serde, serde_json and sha2. The
+isolated fuzz package additionally uses libfuzzer-sys. Their complete pinned
+graphs and license policy are recorded in docs/r02/dependencies.md and the
+Cargo lockfiles.

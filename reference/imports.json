@@ -364,6 +364,13 @@
     "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
   },
   {
+    "source_path": "internal/protocol/errno.go",
+    "destination": "reference/go/internal/protocol/errno.go",
+    "sha256": "9e5c9e026589ee64a6b6da2a5863e1d8cce56a434be4eeb2bad249afe904607f",
+    "disposition": "copy-unchanged",
+    "license_provenance": "Inherited LICENSE/THIRD_PARTY_NOTICES and source-specific provenance; fixture sidecars retain original review; Rust redistribution approval is not asserted"
+  },
+  {
     "source_path": "internal/protocol/protocol_test.go",
     "destination": "reference/go/internal/protocol/protocol_test.go",
     "sha256": "fb31e88e50b26a76c3d29a9af375a64f97c44f0989952d57de6dd73a7755a358",

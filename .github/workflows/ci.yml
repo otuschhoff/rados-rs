@@ -68,3 +68,22 @@ jobs:
         run: |
           cargo audit --deny warnings
           cargo deny check advisories bans licenses sources
+
+  fuzz-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install pinned fuzz toolchain
+        run: |
+          rustup toolchain install nightly-2026-09-01 --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Run parser fuzz smoke tests
+        run: |
+          mkdir -p /tmp/rados-r02-corpus
+          cp testdata/p01/*.bin /tmp/rados-r02-corpus/
+          cargo +nightly-2026-09-01 fuzz run primitive_decoder /tmp/rados-r02-corpus -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run versioned_envelope /tmp/rados-r02-corpus -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run entity_address /tmp/rados-r02-corpus -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run entity_address_vector /tmp/rados-r02-corpus -- -max_total_time=10

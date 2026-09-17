@@ -343,6 +343,7 @@ fn verify_report(context: &VerificationContext<'_>, data: &[u8]) -> Result<(), S
     }
     if verify_go_checkout {
         let go_root = Path::new(&report.controller.command[2]);
+        require_clean_tree(go_root, "Go oracle")?;
         if git_value(go_root, &["rev-parse", "HEAD"])? != GO_REVISION
             || git_value(go_root, &["rev-parse", "HEAD^{tree}"])? != GO_TREE
         {
@@ -397,6 +398,7 @@ fn is_sha256(value: &str) -> bool {
 ///
 /// Returns an error when report parsing or any evidence check fails.
 pub fn verify_report_file(root: &Path, path: &Path) -> Result<(), String> {
+    require_clean_tree(root, "Rust candidate")?;
     let mut data = Vec::new();
     fs::File::open(path)
         .map_err(|error| format!("open report: {error}"))?
@@ -448,7 +450,9 @@ pub fn source_digest(root: &Path) -> Result<String, String> {
     ];
     const DIRECTORIES: &[&str] = &[
         ".github/workflows",
+        "docs/r02",
         "docs/r01",
+        "examples",
         "integration/r01",
         "src",
         "testdata/p01",
@@ -563,6 +567,15 @@ fn verify_rust_probe_execution(
 
 fn git_value(root: &Path, arguments: &[&str]) -> Result<String, String> {
     command_value_in(root, "git", arguments)
+}
+
+fn require_clean_tree(root: &Path, description: &str) -> Result<(), String> {
+    let status = git_value(root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+    if status.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{description} must be a clean committed tree"))
+    }
 }
 
 fn command_value(program: &str, arguments: &[&str]) -> Result<String, String> {

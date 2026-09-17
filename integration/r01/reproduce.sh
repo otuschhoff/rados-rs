@@ -23,6 +23,16 @@ done
 
 root=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 go_root=$(CDPATH= cd -- "$go_root" && pwd)
+git -C "$root" diff --quiet && git -C "$root" diff --cached --quiet &&
+  [ -z "$(git -C "$root" ls-files --others --exclude-standard)" ] || {
+  printf '%s\n' 'R01 bridge: Rust candidate must be a clean committed tree' >&2
+  exit 1
+}
+git -C "$go_root" diff --quiet && git -C "$go_root" diff --cached --quiet &&
+  [ -z "$(git -C "$go_root" ls-files --others --exclude-standard)" ] || {
+  printf '%s\n' 'R01 bridge: Go oracle must be a clean committed tree' >&2
+  exit 1
+}
 case "$rust_probe" in /*) ;; *) rust_probe="$PWD/$rust_probe" ;; esac
 case "$verifier" in /*) ;; *) verifier="$PWD/$verifier" ;; esac
 [ -x "$rust_probe" ] || { printf '%s\n' "R01 bridge: Rust probe is missing or not executable: $rust_probe" >&2; exit 1; }

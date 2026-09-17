@@ -1,7 +1,30 @@
 #![forbid(unsafe_code)]
 
-#[cfg(test)]
+mod client;
+mod config;
+mod error;
+mod identity;
+mod operation;
+mod types;
+
+pub use client::{Client, ObjectRef, Pool};
+pub use config::{Config, SecretKey, SecurityMode};
+pub use error::{Error, ErrorKind, Result};
+pub use identity::{LocatorKey, Namespace, ObjectName};
+pub use operation::{ReadOp, WriteOp};
+pub use types::{
+    CancellationToken, ChecksumType, ClassResult, ClusterStats, CommandResult, InconsistentObject,
+    InconsistentPg, LockMode, LockOptions, Locker, MAX_WATCH_QUEUE, NotifyAcknowledgment,
+    NotifyReply, NotifyTimeout, ObjectCursor, ObjectEntry, ObjectInfo, ObjectPage, OmapEntry,
+    OpResult, OperationOptions, OperationResult, Page, PoolStats, Snapshot, SnapshotContext,
+    SparseExtent, SubOperationFlags, SubOperationResult, Watch, WatchEvent, Watcher, Xattr,
+};
+
+#[allow(dead_code)]
 mod entity_name;
+#[allow(dead_code)]
+mod protocol;
+mod wire;
 
 #[cfg(test)]
 mod tests {

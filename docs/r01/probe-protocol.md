@@ -31,8 +31,9 @@ that probe with the canonical request. Hash-shaped placeholders therefore fail
 verification.
 
 The controller requires explicit Go root, Rust probe, verifier and report paths.
-It validates both Rust executables before inspecting or cloning Go, and never
-falls back to Go. It checks Go commit `c8bb148a1379b51ef87256c27f366a05f8da4dc4`
+It requires both source repositories to be clean committed trees, validates
+both Rust executables before inspecting or cloning Go, and never falls back to
+Go. It checks Go commit `c8bb148a1379b51ef87256c27f366a05f8da4dc4`
 and tree `c5039b6b50a05b942a902f70dc2fcb090463e8c7`, clones that checkout into a
 temporary directory, and copies the Go helper under the cloned module so Go's
 `internal` boundary remains intact. It runs the adapter's negative tests before

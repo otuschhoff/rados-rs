@@ -1,0 +1,43 @@
+[package]
+name = "rados-r02-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+crc32c = "=0.6.8"
+libfuzzer-sys = "=0.4.13"
+
+[[bin]]
+name = "primitive_decoder"
+path = "fuzz_targets/primitive_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "versioned_envelope"
+path = "fuzz_targets/versioned_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entity_address"
+path = "fuzz_targets/entity_address.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entity_address_vector"
+path = "fuzz_targets/entity_address_vector.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

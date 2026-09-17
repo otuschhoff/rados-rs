@@ -1,3 +1,4 @@
 /target/
+/fuzz/target/
 /.tmp/
 .DS_Store

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/otuschhoff/rados-rs/integration/r02/report.schema.json",
+  "title": "rados-rs R02 versioned-envelope bridge report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "case_id", "operation", "status", "generated_at", "input", "bounds", "rust", "go", "artifacts", "controller"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "case_id": {"const": "r02/versioned-envelope-newer-compatible"},
+    "operation": {"const": "versioned-envelope-round-trip"},
+    "status": {"const": "passed"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "input": {"$ref": "#/$defs/input"},
+    "bounds": {"$ref": "#/$defs/bounds"},
+    "rust": {"$ref": "#/$defs/implementation"},
+    "go": {"$ref": "#/$defs/implementation"},
+    "artifacts": {"$ref": "#/$defs/artifacts"},
+    "controller": {"$ref": "#/$defs/controller"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input": {
+      "type": "object", "additionalProperties": false, "required": ["encoded_base64", "sha256"],
+      "properties": {"encoded_base64": {"const": "AwEDAAAAAQL/"}, "sha256": {"const": "ddf6a266b64aecd343a549cf7f07562e2622236ec8cef93133a1b00372361edb"}}
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false, "required": ["max_record_bytes", "max_input_bytes", "max_output_bytes"],
+      "properties": {"max_record_bytes": {"const": 4096}, "max_input_bytes": {"const": 9}, "max_output_bytes": {"const": 9}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "case_id", "implementation_id", "operation", "input_sha256", "fields", "encoded_base64", "encoded_sha256", "status"],
+      "properties": {
+        "schema_version": {"const": 1}, "case_id": {"const": "r02/versioned-envelope-newer-compatible"},
+        "implementation_id": {"enum": ["rust", "go"]}, "operation": {"const": "versioned-envelope-round-trip"},
+        "input_sha256": {"const": "ddf6a266b64aecd343a549cf7f07562e2622236ec8cef93133a1b00372361edb"},
+        "fields": {
+          "type": "object", "additionalProperties": false,
+          "required": ["local_version", "struct_version", "struct_compat", "known_value", "trailing_base64"],
+          "properties": {"local_version": {"const": 2}, "struct_version": {"const": 3}, "struct_compat": {"const": 1}, "known_value": {"const": 513}, "trailing_base64": {"const": "/w=="}}
+        },
+        "encoded_base64": {"const": "AwEDAAAAAQL/"}, "encoded_sha256": {"const": "ddf6a266b64aecd343a549cf7f07562e2622236ec8cef93133a1b00372361edb"}, "status": {"const": "passed"}
+      }
+    },
+    "implementation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["implementation_id", "source_revision", "source_tree", "source_files_sha256", "features", "lockfile_sha256", "compiler", "target", "driver_sha256", "command", "exit_code", "stdout_sha256", "result"],
+      "properties": {
+        "implementation_id": {"enum": ["rust", "go"]}, "source_revision": {"type": "string", "minLength": 1}, "source_tree": {"type": "string", "minLength": 1},
+        "source_files_sha256": {"$ref": "#/$defs/sha256"}, "features": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "lockfile_sha256": {"$ref": "#/$defs/sha256"}, "compiler": {"type": "string", "minLength": 1}, "target": {"type": "string", "minLength": 1},
+        "driver_sha256": {"$ref": "#/$defs/sha256"}, "command": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 16},
+        "exit_code": {"const": 0}, "stdout_sha256": {"$ref": "#/$defs/sha256"}, "result": {"$ref": "#/$defs/result"}
+      }
+    },
+    "artifacts": {
+      "type": "object", "additionalProperties": false, "required": ["adapter_path", "adapter_sha256", "schema_path", "schema_sha256"],
+      "properties": {"adapter_path": {"const": "tools/r02/go-probe"}, "adapter_sha256": {"$ref": "#/$defs/sha256"}, "schema_path": {"const": "integration/r02/report.schema.json"}, "schema_sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "controller": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256", "command"],
+      "properties": {"path": {"const": "integration/r02/reproduce.sh"}, "sha256": {"$ref": "#/$defs/sha256"}, "command": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 9, "maxItems": 9}}
+    }
+  }
+}
