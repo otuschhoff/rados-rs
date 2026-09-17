@@ -8,8 +8,10 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
 crc32c = "=0.6.8"
 libfuzzer-sys = "=0.4.13"
+tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
 
 [[bin]]
 name = "primitive_decoder"
@@ -35,6 +37,48 @@ bench = false
 [[bin]]
 name = "entity_address_vector"
 path = "fuzz_targets/entity_address_vector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "banner"
+path = "fuzz_targets/banner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crc_frame"
+path = "fuzz_targets/crc_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "secure_frame"
+path = "fuzz_targets/secure_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "controls"
+path = "fuzz_targets/controls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "messages"
+path = "fuzz_targets/messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bounded_session_scripts"
+path = "fuzz_targets/bounded_session_scripts.rs"
 test = false
 doc = false
 bench = false

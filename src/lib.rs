@@ -4,6 +4,8 @@ mod client;
 mod config;
 mod error;
 mod identity;
+#[allow(dead_code)]
+mod msgr;
 mod operation;
 mod types;
 

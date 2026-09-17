@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "task-validation",
+  "certifying": false,
+  "recorded_at_utc": "2026-09-17",
+  "host": "aarch64-apple-darwin",
+  "budget_seconds_per_target": 60,
+  "command_template": "cd fuzz && cargo fuzz run <target> /tmp/rados-r03-fuzz/corpus/<target> -- -max_total_time=60 -print_final_stats=1",
+  "corpus_setup": "integration/r03/prepare-fuzz-corpus.sh /tmp/rados-r03-fuzz/corpus",
+  "toolchain": {
+    "rustup": "nightly-2026-09-01",
+    "rustc": "rustc 1.100.0-nightly (0dfb098f3 2026-08-31)",
+    "rustc_commit": "0dfb098f3aeecbe38c2566ca090193280e7349e7c",
+    "llvm": "23.1.0",
+    "cargo": "cargo 1.100.0-nightly (e8cb624d5 2026-08-22)",
+    "cargo_fuzz": "0.13.2",
+    "libfuzzer_sys": "0.4.13"
+  },
+  "bound_sources": {
+    "integration/r03/prepare-fuzz-corpus.sh": "a453673bb9af738f53f9ce4e7d805369a1c9a4444709e7ed2ff6463eb02e7caf",
+    "fuzz/Cargo.lock": "a99b27e1cb3f84c0b51d6000a7b8471a1c825f44ff3d85497fe0d977773b191f",
+    "fuzz/Cargo.toml": "fa17e20261d564b19d56129b2f3009312ebbdfc77df413799ce5de98c1596d0d",
+    "fuzz/src/lib.rs": "85b2f6c6cd93122c1b567f704369553e3d5c1aea3002ab213db8be20066dc396",
+    "src/protocol/address.rs": "446752eb2196faeba445b9b1df4d8b10f17980b210d16b3b99350e2ad1110b8b",
+    "src/protocol/features.rs": "3577d76b8adba382f526cd8afa0fda51e6caa03b18496c5697290c29b87f422d",
+    "src/wire/codec.rs": "1dcae53556dea2f77e602ecfbecef577bd29bf00dc48c1a05ea8f28a0c1f7a4e",
+    "src/wire/crc.rs": "1e0e9d48418a5f7e78ee753b1ed843a6f08f41021f6c632e8d58ef28fa131066",
+    "src/msgr/banner.rs": "18facb1ad47f17ff68caa94aba104b4f9923605caad687259bc2a3b860d0cbc2",
+    "src/msgr/control.rs": "f37f5b4e2d99559418b6e9967d12382aec32569ee1b1373522ab9cf3804b2d04",
+    "src/msgr/frame.rs": "e0dea72e5b959a0797e482b152343cfec9c8cfaf439d8d93d707e710436dcb9c",
+    "src/msgr/message.rs": "7a70a4f679a78420b0a5009718e122cde47bcb06cd4cc8aad5bee40fca58e76b",
+    "src/msgr/secure.rs": "a9e773d648a2161845d4d304ae0677d2ce136a37a9c945b66a8ccbb082758568",
+    "src/msgr/session.rs": "1bed88ec0c3c3bf272580ea6bbec0f6bfb42e3829d950e9754854bd5d1af00e2"
+  },
+  "seed_corpus": {
+    "banner/banner-rev1.bin": "6819c56d3d3d3ccaa0545a80d55aaa8088d88e9f849113cdafa58feb298cfcca",
+    "crc_frame/crc-four-segment-with-data-crc.bin": "d979a0760c83e2bbffbcd3b8b11ce13693adb1fcf8b41560ab76c24c403d7546",
+    "secure_frame/secure-one-segment.bin": "592152e22495cecb210cf5a7bfefac49f6cdd8bbbb14e223db3538bef0b3926d",
+    "secure_frame/crc-four-segment-generation.bin": "36b5c944455abf81786e95a3474e2eae3e05cf0cec0745f9fd4b08514246a7af",
+    "controls/ack-sequence.bin": "a8b3e905677c24bc6c072418d66521e2025b9ce01052ccdfc5fe2c45c21005cc",
+    "messages/message-frame.bin": "00a22987b019e085cf811b10852000116e3c63adc33bf86729485a2ecb81ff26",
+    "bounded_session_scripts/go-session-938f779fb2101a93.raw": "a4f61a6bb886a378045132f942db5e025dd8ebf34b3ebc86f97ade8707a40de8"
+  },
+  "targets": [
+    {
+      "name": "banner",
+      "harness_sha256": "a1602f74543906a5240520c293531989b350012f087e0af1168442b4673b5083",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 37486031,
+      "coverage": 56,
+      "features": 62,
+      "final_corpus_entries": 7,
+      "final_corpus_bytes": 94,
+      "raw_output_sha256": "9c0541ee9ac4f820aa596bcad04ba079514d5b03e4c73aa8d3a3dcfc56505afb"
+    },
+    {
+      "name": "crc_frame",
+      "harness_sha256": "93276fdf20887defc58e856dcbd7df2e358959fc6fac1531ac5fca72d19ec94d",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 24151663,
+      "coverage": 306,
+      "features": 439,
+      "final_corpus_entries": 21,
+      "final_corpus_bytes": 967,
+      "raw_output_sha256": "81ad88fb8a80fb5882d80567aaf5305f30bcb6c92a36b1f722bc472ab2ec63a8"
+    },
+    {
+      "name": "secure_frame",
+      "harness_sha256": "606906730a3f062cbb45dedf7359e31c7574eda7474faeea292e7d6f060e45d4",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 5715098,
+      "coverage": 886,
+      "features": 2043,
+      "final_corpus_entries": 58,
+      "final_corpus_bytes": 3630,
+      "raw_output_sha256": "f7a89534e4c420af891a16a7fbd1141ab583c0a87e06fb80a404b119d6a3f2f4"
+    },
+    {
+      "name": "controls",
+      "harness_sha256": "f28335bd2e52eced085896ae66d73eb4699dcb79509b56dfacfced06ca6f10ab",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 18975885,
+      "coverage": 1025,
+      "features": 1596,
+      "final_corpus_entries": 201,
+      "final_corpus_bytes": 7907,
+      "raw_output_sha256": "0f538998391b2cf0b447d423036441b4804de180f33e8f1621df82d1d4625784"
+    },
+    {
+      "name": "messages",
+      "harness_sha256": "1507b547f12ddfa2a6af9822d08076e0df37ae60ada79d966bffdb8c7c033bb4",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 22670146,
+      "coverage": 448,
+      "features": 578,
+      "final_corpus_entries": 18,
+      "final_corpus_bytes": 1357,
+      "raw_output_sha256": "c7c60a378e191bbf94ab75f5d466d871342bda83a96ef25964d9a9f0ef31a133"
+    },
+    {
+      "name": "bounded_session_scripts",
+      "harness_sha256": "4dd5d9d008a56f5e30b000774a8e18595613e2211eff4875acb2641ab9294e6c",
+      "exit_status": 0,
+      "elapsed_seconds": 62,
+      "executions": 2427154,
+      "coverage": 818,
+      "features": 3342,
+      "final_corpus_entries": 515,
+      "final_corpus_bytes": 4726,
+      "raw_output_sha256": "130eaa61f5deee6fc613b186334b6d88fc338539f686ea6c4276686e125d0ac1"
+    }
+  ]
+}

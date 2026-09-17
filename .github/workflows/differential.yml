@@ -49,3 +49,17 @@ jobs:
             --rust-probe target/debug/rados-r02-probe \
             --verifier target/debug/rados-r02-verify \
             --report target/r02/report.json
+      - name: Run bounded R03 Rust/Go bridge
+        working-directory: rados-rs
+        run: |
+          integration/r03/reproduce.sh \
+            --go-root ../rados-go \
+            --rust-probe target/r03/rados-r03-probe \
+            --verifier target/r03/rados-r03-verify \
+            --report target/r03/report.json
+      - name: Retain R03 bridge report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r03-bridge-report
+          path: rados-rs/target/r03/report.json
+          if-no-files-found: error

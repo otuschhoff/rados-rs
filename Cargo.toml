@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02"]
+members = [".", "tools/r01", "tools/r02", "tools/r03"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -28,7 +28,16 @@ publish = false
 include = [
     "/src/**",
     "/examples/**",
+    "/docs/RUST_PORT_SPEC.md",
+    "/docs/decisions/**",
+    "/docs/r00/**",
+    "/docs/r01/**",
     "/docs/r02/**",
+    "/docs/r03/**",
+    "/reference/**",
+    "/integration/**",
+    "/testdata/README.md",
+    "/testdata/manifest.schema.json",
     "/testdata/p01/entity-name-client-1.bin",
     "/testdata/p01/entity-name-client-1.bin.json",
     "/testdata/p01/entity-name-mon-new.bin",
@@ -41,6 +50,7 @@ include = [
     "/testdata/p01/entity-addr-ipv6-modern.bin.json",
     "/testdata/p01/entity-addrvec-modern.bin",
     "/testdata/p01/entity-addrvec-modern.bin.json",
+    "/testdata/p02/**",
     "/Cargo.toml",
     "/Cargo.lock",
     "/LICENSE",
@@ -53,8 +63,13 @@ include = [
 name = "rados"
 
 [dependencies]
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc", "zeroize"] }
 crc32c = "=0.6.8"
+tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync"] }
 zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync", "test-util"] }
 
 [lints]
 workspace = true

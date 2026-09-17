@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture": "upstream-crc-disabled-one-segment.bin",
+  "sha256": "68cef6e79159b37891d93457c98a1748a311a6becc12cf2a67a7da90234e7569",
+  "kind": "upstream-ceph-frameassembler",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/include/msgr.h", "src/include/crc32c.h", "src/common/sctp_crc32.c", "src/msg/async/frames_v2.h", "src/msg/async/frames_v2.cc"]
+  },
+  "generator": {
+    "tool": "Ceph FrameAssembler via libceph-common.so.2",
+    "version": "ceph-common-20.2.4-0.el9",
+    "command": ["./integration/p02/reproduce-upstream.sh"],
+    "image": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+  },
+  "secrets": {"contains_secrets": false, "synthetic_only": true},
+  "license": {"upstream_expression": "(LGPL-2.1-or-later AND BSD-3-Clause)", "redistribution": "pending", "reviewed_by": "pending human review"}
+}

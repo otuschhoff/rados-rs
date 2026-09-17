@@ -4,3 +4,4 @@ mod codec;
 mod crc;
 
 pub(crate) use codec::{Decoder, Encoder, WireError};
+pub(crate) use crc::crc32c;

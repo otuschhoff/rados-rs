@@ -1,6 +1,6 @@
-mod address;
+pub(crate) mod address;
 mod errno;
-mod features;
+pub(crate) mod features;
 
 #[cfg(test)]
 mod tests {

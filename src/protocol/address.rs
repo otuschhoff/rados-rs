@@ -16,7 +16,7 @@ impl AddressType {
     const ANY: Self = Self(3);
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct EntityAddr {
     address_type: AddressType,
     nonce: u32,
@@ -24,6 +24,17 @@ pub(crate) struct EntityAddr {
     socket_data: Vec<u8>,
     legacy_encoding: bool,
 }
+
+impl PartialEq for EntityAddr {
+    fn eq(&self, other: &Self) -> bool {
+        self.address_type == other.address_type
+            && self.nonce == other.nonce
+            && self.family == other.family
+            && self.socket_data == other.socket_data
+    }
+}
+
+impl Eq for EntityAddr {}
 
 impl EntityAddr {
     pub(crate) fn decode(decoder: &mut Decoder<'_>) -> Result<Self, WireError> {
@@ -138,6 +149,12 @@ impl EntityAddr {
                 GlobalFeatures::MESSAGE_ADDRESS_V2.0 | GlobalFeatures::SERVER_NAUTILUS_MASK.0,
             )
         }
+    }
+
+    pub(crate) fn has_same_endpoint(&self, other: &Self) -> bool {
+        self.family != AF_UNSPEC
+            && self.family == other.family
+            && self.socket_data == other.socket_data
     }
 }
 
@@ -280,6 +297,24 @@ mod tests {
             u32::from_le_bytes(ipv6.socket_data[22..26].try_into().expect("scope")),
             0x0506_0708
         );
+    }
+
+    #[test]
+    fn wire_encoding_hint_is_not_part_of_address_identity() {
+        let mut legacy = EntityAddr {
+            address_type: AddressType::NONE,
+            nonce: 13,
+            family: AF_UNSPEC,
+            socket_data: vec![0; 26],
+            legacy_encoding: true,
+        };
+        let modern = EntityAddr {
+            legacy_encoding: false,
+            ..legacy.clone()
+        };
+        assert_eq!(legacy, modern);
+        legacy.nonce += 1;
+        assert_ne!(legacy, modern);
     }
 
     #[test]

@@ -1,4 +1,9 @@
 /target/
 /fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/*
+!/fuzz/corpus/bounded_session_scripts/
+/fuzz/corpus/bounded_session_scripts/*
+!/fuzz/corpus/bounded_session_scripts/go-session-938f779fb2101a93.raw
 /.tmp/
 .DS_Store

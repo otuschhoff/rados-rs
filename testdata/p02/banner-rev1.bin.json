@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture": "banner-rev1.bin",
+  "sha256": "6819c56d3d3d3ccaa0545a80d55aaa8088d88e9f849113cdafa58feb298cfcca",
+  "kind": "native-oracle",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "69f84cc2651aa259a15bc192ddaabd3baba07489",
+    "paths": ["src/include/msgr.h"]
+  },
+  "generator": {
+    "tool": "source-derived independent C++/OpenSSL oracle",
+    "version": "Ceph 20.2.0 contract",
+    "command": ["./integration/p02/reproduce.sh"],
+    "image": "quay.io/ceph/ceph@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+  },
+  "secrets": {"contains_secrets": false, "synthetic_only": true},
+  "license": {"upstream_expression": "LGPL-2.1-or-later", "redistribution": "pending", "reviewed_by": "pending human review"}
+}
