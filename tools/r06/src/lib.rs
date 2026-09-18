@@ -858,6 +858,24 @@ fn git_value(root: &Path, arguments: &[&str]) -> Result<String, String> {
         .map(|value| value.trim().to_owned())
         .map_err(|error| error.to_string())
 }
+fn verify_rust_revision(root: &Path, revision: &str, tree: &str) -> Result<(), String> {
+    let commit_reference = format!("{revision}^{{commit}}");
+    let tree_reference = format!("{revision}^{{tree}}");
+    if git_value(root, &["rev-parse", &commit_reference])? != revision
+        || git_value(root, &["rev-parse", &tree_reference])? != tree
+    {
+        return Err("Rust revision provenance is invalid".to_owned());
+    }
+    let status = Command::new("git")
+        .args(["merge-base", "--is-ancestor", revision, "HEAD"])
+        .current_dir(root)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if !status.success() {
+        return Err("Rust revision is not an ancestor of HEAD".to_owned());
+    }
+    Ok(())
+}
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -992,9 +1010,8 @@ pub fn verify_report_file(root: &Path, report_path: &Path) -> Result<(), String>
     {
         return Err("Go oracle is not clean and pinned".to_owned());
     }
-    if report.rust.source_revision != git_value(root, &["rev-parse", "HEAD"])?
-        || report.rust.source_tree != git_value(root, &["rev-parse", "HEAD^{tree}"])?
-        || report.rust.source_before_sha256 != rust_source_digest(root)?
+    verify_rust_revision(root, &report.rust.source_revision, &report.rust.source_tree)?;
+    if report.rust.source_before_sha256 != rust_source_digest(root)?
         || report.rust.lockfile_sha256 != file_digest(&root.join("Cargo.lock"))?
         || !report.rust.compiler.starts_with("rustc 1.98.0 ")
         || Path::new(&report.rust.binary_path) != rust_probe
@@ -1364,5 +1381,15 @@ mod tests {
         let mut report = shape_report(root);
         report.fixtures.pop();
         assert!(verify_shape(root, &report).is_err());
+    }
+
+    #[test]
+    fn rust_revision_provenance_requires_a_real_ancestor() {
+        let root = Path::new("../..");
+        let revision = git_value(root, &["rev-parse", "HEAD"]).unwrap();
+        let tree = git_value(root, &["rev-parse", "HEAD^{tree}"]).unwrap();
+        assert!(verify_rust_revision(root, &revision, &tree).is_ok());
+        assert!(verify_rust_revision(root, &"0".repeat(40), &tree).is_err());
+        assert!(verify_rust_revision(root, &revision, &"0".repeat(40)).is_err());
     }
 }

@@ -34,7 +34,7 @@ affinity and duplicate temporary OSD slots for qualification; native Ceph 20.2.4
 fixtures are authoritative for those cases.
 
 The latest pre-commit report passed with SHA-256
-`8ddd5380482d3b5ebcc240665d81fb408084817d283fc87a1c6a6fcef20b8edd`.
+`9e145cea8c5b11cb191f85861be0e01e3867b2ea1c1614518a4b9fc287bcea21`.
 Regenerate it after any bound source, fixture, manifest, adapter, schema or
 controller change.
 
