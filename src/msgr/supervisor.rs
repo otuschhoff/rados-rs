@@ -68,7 +68,14 @@ pub(crate) struct Request {
     id: u64,
     transaction_id: u64,
     commands: mpsc::Sender<Command>,
-    result: oneshot::Receiver<Result<Option<Message>, SessionError>>,
+    result: Option<oneshot::Receiver<Result<Option<Message>, SessionError>>>,
+    cancel_on_drop: bool,
+}
+
+struct AdmissionGuard {
+    request_id: u64,
+    commands: mpsc::Sender<Command>,
+    armed: bool,
 }
 
 impl Session {
@@ -131,12 +138,19 @@ impl Session {
                 mpsc::error::TrySendError::Full(_) => SessionError::QueueSaturated,
                 mpsc::error::TrySendError::Closed(_) => SessionError::Closed,
             })?;
+        let mut guard = AdmissionGuard {
+            request_id,
+            commands: self.commands.clone(),
+            armed: true,
+        };
         let transaction_id = admitted_rx.await.map_err(|_| SessionError::Closed)??;
+        guard.armed = false;
         Ok(Request {
             id: request_id,
             transaction_id,
             commands: self.commands.clone(),
-            result,
+            result: Some(result),
+            cancel_on_drop: false,
         })
     }
 
@@ -184,9 +198,11 @@ impl Session {
 
     pub(crate) async fn shutdown(&self) {
         self.close();
-        if let Some(owner) = self.owner.lock().await.take() {
-            let _ = owner.await;
+        let mut owner = self.owner.lock().await;
+        if let Some(task) = owner.as_mut() {
+            let _ = task.await;
         }
+        *owner = None;
     }
 }
 
@@ -201,18 +217,61 @@ impl Request {
         self.transaction_id
     }
 
-    pub(crate) async fn result(self) -> Result<Option<Message>, SessionError> {
-        self.result.await.map_err(|_| SessionError::Closed)?
+    pub(crate) fn cancel_on_drop(&mut self) {
+        self.cancel_on_drop = true;
     }
 
-    pub(crate) async fn cancel(self) -> Result<Option<Message>, SessionError> {
+    pub(crate) async fn result(mut self) -> Result<Option<Message>, SessionError> {
+        let outcome = self
+            .result
+            .as_mut()
+            .ok_or(SessionError::Closed)?
+            .await
+            .map_err(|_| SessionError::Closed)?;
+        self.cancel_on_drop = false;
+        self.result = None;
+        outcome
+    }
+
+    pub(crate) async fn cancel(mut self) -> Result<Option<Message>, SessionError> {
+        self.cancel_on_drop = false;
         self.commands
             .send(Command::Cancel {
                 request_id: self.id,
             })
             .await
             .map_err(|_| SessionError::Closed)?;
-        self.result.await.map_err(|_| SessionError::Closed)?
+        self.result
+            .take()
+            .ok_or(SessionError::Closed)?
+            .await
+            .map_err(|_| SessionError::Closed)?
+    }
+}
+
+impl Drop for Request {
+    fn drop(&mut self) {
+        if self.cancel_on_drop && self.result.is_some() {
+            enqueue_cancel(&self.commands, self.id);
+        }
+    }
+}
+
+impl Drop for AdmissionGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            enqueue_cancel(&self.commands, self.request_id);
+        }
+    }
+}
+
+fn enqueue_cancel(commands: &mpsc::Sender<Command>, request_id: u64) {
+    let command = Command::Cancel { request_id };
+    if let Err(mpsc::error::TrySendError::Full(command)) = commands.try_send(command) {
+        let commands = commands.clone();
+        tokio::spawn(async move {
+            let _ = commands.send(command).await;
+        });
     }
 }
 
@@ -415,6 +474,47 @@ mod tests {
             .await
             .expect("ack frame");
         assert_eq!(ack.tag, Tag::Ack);
+
+        let snapshot = session.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.queued, 0);
+        assert_eq!(snapshot.in_flight, 0);
+        assert_eq!(snapshot.retained_bytes, 0);
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancel_on_drop_releases_read_only_request_state() {
+        let connector: Connector = Arc::new(|| Box::pin(std::future::pending()));
+        let session = Session::spawn(machine(4), None, Some(connector));
+        let mut request = session
+            .admit(message(b"read-only"), false)
+            .await
+            .expect("admit");
+        request.cancel_on_drop();
+        drop(request);
+        tokio::task::yield_now().await;
+
+        let snapshot = session.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.queued, 0);
+        assert_eq!(snapshot.in_flight, 0);
+        assert_eq!(snapshot.retained_bytes, 0);
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn cancel_on_drop_while_awaiting_result_releases_request_state() {
+        let connector: Connector = Arc::new(|| Box::pin(std::future::pending()));
+        let session = Arc::new(Session::spawn(machine(4), None, Some(connector)));
+        let mut request = session
+            .admit(message(b"read-only"), false)
+            .await
+            .expect("admit");
+        request.cancel_on_drop();
+        let task = tokio::spawn(async move { request.result().await });
+        tokio::task::yield_now().await;
+        task.abort();
+        let _ = task.await;
+        tokio::task::yield_now().await;
 
         let snapshot = session.snapshot().await.expect("snapshot");
         assert_eq!(snapshot.queued, 0);

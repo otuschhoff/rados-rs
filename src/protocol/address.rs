@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::protocol::features::GlobalFeatures;
 use crate::wire::{Decoder, Encoder, WireError};
@@ -64,6 +64,12 @@ impl EntityAddr {
                     self.socket_data[3],
                     self.socket_data[4],
                     self.socket_data[5],
+                )),
+                port,
+            )),
+            AF_INET6 => Some(SocketAddr::new(
+                IpAddr::V6(Ipv6Addr::from(
+                    <[u8; 16]>::try_from(self.socket_data.get(6..22)?).ok()?,
                 )),
                 port,
             )),

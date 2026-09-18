@@ -1,5 +1,5 @@
 use crate::cephx::connector;
-use crate::cephx::core::{SERVICE_AUTH, SERVICE_MONITOR, TicketBlob};
+use crate::cephx::core::{SERVICE_AUTH, SERVICE_MONITOR, SERVICE_OSD, TicketBlob};
 use crate::maps::{Fsid, Limits as MapLimits};
 use crate::mon::client::{
     MonitorClient, MonitorConfig, MonitorError, SessionFactory, authenticated_session_factory,
@@ -9,11 +9,12 @@ use crate::mon::seeds::{SeedError, SeedLimits, resolve_seeds};
 use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::session::{Config as SessionConfig, ReconnectPolicy, SessionError};
+use crate::osd::{Client as OSDClient, ClientError, NO_SNAP, Target as OSDTarget};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectName, OperationOptions, Result,
-    SecurityMode,
+    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectInfo, ObjectName, OperationOptions,
+    Result, SecurityMode,
 };
 use std::fmt;
 use std::future::Future;
@@ -48,6 +49,8 @@ struct ClientInner {
     closed: AtomicBool,
     lifecycle: Mutex<()>,
     monitor: RwLock<Option<Arc<MonitorClient>>>,
+    authority: Arc<RwLock<Option<Arc<connector::MonitorConnector>>>>,
+    objecter: OSDClient,
     #[cfg(test)]
     factory: Option<SessionFactory>,
 }
@@ -80,11 +83,21 @@ impl Client {
     /// Returns an invalid-argument error when required local configuration is absent.
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
+        let authority = Arc::new(RwLock::new(None));
+        let objecter = OSDClient::new(
+            Arc::clone(&authority),
+            FRAME_LIMITS,
+            config.dial_timeout(),
+            config.handshake_timeout(),
+            config.security_mode() == SecurityMode::Crc,
+        );
         Ok(Self(Arc::new(ClientInner {
             config,
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
+            authority,
+            objecter,
             #[cfg(test)]
             factory: None,
         })))
@@ -93,11 +106,21 @@ impl Client {
     #[cfg(test)]
     fn with_factory(config: Config, factory: SessionFactory) -> Result<Self> {
         config.validate()?;
+        let authority = Arc::new(RwLock::new(None));
+        let objecter = OSDClient::new(
+            Arc::clone(&authority),
+            FRAME_LIMITS,
+            config.dial_timeout(),
+            config.handshake_timeout(),
+            config.security_mode() == SecurityMode::Crc,
+        );
         Ok(Self(Arc::new(ClientInner {
             config,
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
+            authority,
+            objecter,
             factory: Some(factory),
         })))
     }
@@ -133,6 +156,7 @@ impl Client {
             return Ok(());
         }
         if let Some(stale) = self.take_monitor() {
+            self.clear_authority();
             stale.close();
             let _ = wait_shutdown_bounded(stale, &options, "Client::connect").await;
         }
@@ -294,6 +318,17 @@ impl Client {
                 .await?
             }
         };
+        if self.0.objecter.has_sessions() {
+            wait_client_bounded(
+                async {
+                    self.0.objecter.shutdown().await;
+                    Ok(())
+                },
+                &options,
+                "Client::shutdown",
+            )
+            .await?;
+        }
         let Some(monitor) = self.monitor() else {
             return Ok(());
         };
@@ -305,6 +340,7 @@ impl Client {
     /// Idempotently closes the shared client without blocking or network I/O.
     pub fn close(&self) {
         self.0.closed.store(true, Ordering::Release);
+        self.0.objecter.close();
         if let Some(monitor) = self.monitor() {
             monitor.close();
         }
@@ -390,7 +426,16 @@ impl Client {
             .is_some_and(|current| Arc::ptr_eq(current, monitor))
         {
             *slot = None;
+            self.clear_authority();
         }
+    }
+
+    fn clear_authority(&self) {
+        self.0
+            .authority
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
     }
 
     #[allow(clippy::too_many_lines)]
@@ -455,7 +500,7 @@ impl Client {
             cephx_limits: crate::cephx::crypto::Limits::default(),
             handshake_timeout: self.0.config.handshake_timeout(),
             max_banner_payload: 64,
-            requested_keys: SERVICE_AUTH | SERVICE_MONITOR,
+            requested_keys: SERVICE_AUTH | SERVICE_MONITOR | SERVICE_OSD,
             allow_crc: self.0.config.security_mode() == SecurityMode::Crc,
             global_id: 0,
             old_ticket: TicketBlob {
@@ -471,6 +516,7 @@ impl Client {
                 connector_config,
                 session_config,
                 self.0.config.dial_timeout(),
+                Arc::clone(&self.0.authority),
             )
         });
         #[cfg(not(test))]
@@ -478,6 +524,7 @@ impl Client {
             connector_config,
             session_config,
             self.0.config.dial_timeout(),
+            Arc::clone(&self.0.authority),
         );
         Ok((
             MonitorConfig {
@@ -744,6 +791,152 @@ impl ObjectRef {
     #[must_use]
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// Reads up to `length` bytes starting at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable routing, transport, deadline, cancellation, bounds, or Ceph errors.
+    pub async fn read(
+        &self,
+        offset: u64,
+        length: u64,
+        options: OperationOptions,
+    ) -> Result<(Vec<u8>, ObjectInfo)> {
+        let operation = "ObjectRef::read";
+        let options = bounded_options(
+            options,
+            self.pool.client.0.config.operation_timeout(),
+            operation,
+        )?;
+        self.pool.client.ready(operation, &options)?;
+        let monitor = self.pool.client.connected_monitor(operation)?;
+        let target = self.target(&monitor, operation)?;
+        let result = self
+            .pool
+            .client
+            .0
+            .objecter
+            .read(&monitor, target, offset, length, &options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))?;
+        Ok((
+            result.data,
+            ObjectInfo {
+                size: 0,
+                modified_at: UNIX_EPOCH,
+                version: result.version,
+            },
+        ))
+    }
+
+    /// Returns object size, modification time, and version.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable routing, transport, deadline, cancellation, bounds, or Ceph errors.
+    pub async fn stat(&self, options: OperationOptions) -> Result<ObjectInfo> {
+        let operation = "ObjectRef::stat";
+        let options = bounded_options(
+            options,
+            self.pool.client.0.config.operation_timeout(),
+            operation,
+        )?;
+        self.pool.client.ready(operation, &options)?;
+        let monitor = self.pool.client.connected_monitor(operation)?;
+        let target = self.target(&monitor, operation)?;
+        let result = self
+            .pool
+            .client
+            .0
+            .objecter
+            .stat(&monitor, target, &options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))?;
+        let data: [u8; 16] = result
+            .data
+            .try_into()
+            .map_err(|_| Error::new(ErrorKind::NotConnected).with_operation(operation))?;
+        let size = u64::from_le_bytes(
+            data[..8]
+                .try_into()
+                .map_err(|_| Error::new(ErrorKind::NotConnected).with_operation(operation))?,
+        );
+        let seconds = u32::from_le_bytes(
+            data[8..12]
+                .try_into()
+                .map_err(|_| Error::new(ErrorKind::NotConnected).with_operation(operation))?,
+        );
+        let nanoseconds = u32::from_le_bytes(
+            data[12..]
+                .try_into()
+                .map_err(|_| Error::new(ErrorKind::NotConnected).with_operation(operation))?,
+        );
+        if nanoseconds >= 1_000_000_000 {
+            return Err(Error::new(ErrorKind::NotConnected).with_operation(operation));
+        }
+        Ok(ObjectInfo {
+            size,
+            modified_at: UNIX_EPOCH + Duration::new(u64::from(seconds), nanoseconds),
+            version: result.version,
+        })
+    }
+
+    fn target(&self, monitor: &MonitorClient, operation: &'static str) -> Result<OSDTarget> {
+        let pool_id = if let Some(id) = self.pool.id {
+            id
+        } else {
+            let name = std::str::from_utf8(self.pool.name.as_bytes())
+                .map_err(|_| Error::new(ErrorKind::NotFound).with_operation(operation))?;
+            monitor
+                .snapshot()
+                .osdmap()
+                .and_then(|map| map.pool_by_name(name).map(crate::maps::Pool::id))
+                .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))?
+        };
+        Ok(OSDTarget {
+            pool_id,
+            object: self.name.as_bytes().to_vec(),
+            locator: self.pool.locator.as_bytes().to_vec(),
+            namespace: self.pool.namespace.as_bytes().to_vec(),
+            snapshot: self.pool.read_snapshot.unwrap_or(NO_SNAP),
+        })
+    }
+}
+
+fn map_osd_error(error: ClientError, operation: &'static str) -> Error {
+    let (kind, wire_errno) = match error {
+        ClientError::Closed => (ErrorKind::Closed, None),
+        ClientError::NotConnected | ClientError::NoPrimary | ClientError::RecoveryExhausted => {
+            (ErrorKind::NotConnected, None)
+        }
+        ClientError::LimitExceeded => (ErrorKind::InvalidArgument, None),
+        ClientError::MalformedReply => (ErrorKind::NotConnected, None),
+        ClientError::Unsupported => (ErrorKind::Unsupported, None),
+        ClientError::Timeout => (ErrorKind::Timeout, None),
+        ClientError::Cancelled => (ErrorKind::Canceled, None),
+        ClientError::QueueSaturated => (ErrorKind::Conflict, None),
+        ClientError::WireErrno(errno) => (wire_error_kind(errno), Some(errno)),
+    };
+    wire_errno.map_or_else(
+        || Error::new(kind).with_operation(operation),
+        |errno| Error::from_wire(kind, errno).with_operation(operation),
+    )
+}
+
+const fn wire_error_kind(errno: i32) -> ErrorKind {
+    match errno {
+        -2 => ErrorKind::NotFound,
+        -17 => ErrorKind::AlreadyExists,
+        -13 => ErrorKind::PermissionDenied,
+        -95 => ErrorKind::Unsupported,
+        -22 => ErrorKind::InvalidArgument,
+        -122 => ErrorKind::QuotaOrFull,
+        -35 | -11 => ErrorKind::Conflict,
+        -110 => ErrorKind::Timeout,
+        -125 => ErrorKind::Canceled,
+        _ => ErrorKind::Unknown,
     }
 }
 

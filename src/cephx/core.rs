@@ -17,6 +17,7 @@ pub(crate) const CONNECTION_MODE_CRC: u32 = 1;
 pub(crate) const CONNECTION_MODE_SECURE: u32 = 2;
 pub(crate) const CONNECTION_SECRET_SIZE_SECURE: usize = 64;
 pub(crate) const SERVICE_MONITOR: u32 = 0x01;
+pub(crate) const SERVICE_OSD: u32 = 0x04;
 pub(crate) const SERVICE_AUTH: u32 = 0x20;
 
 const ENTITY_CLIENT: u32 = 0x08;

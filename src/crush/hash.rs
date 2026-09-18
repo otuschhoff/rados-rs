@@ -61,7 +61,7 @@ fn rjenkins(value: &[u8]) -> u32 {
         let (target, shift) = match index {
             0..=3 => (&mut first, index * 8),
             4..=7 => (&mut second, (index - 4) * 8),
-            _ => (&mut hash, (index - 8) * 8),
+            _ => (&mut hash, (index - 7) * 8),
         };
         *target = target.wrapping_add(u32::from(byte) << shift);
     }
@@ -110,6 +110,7 @@ mod tests {
             object_hash(b"object", b"locator", b"namespace"),
             object_hash(b"different", b"locator", b"namespace")
         );
+        assert_eq!(object_hash(b"located", b"routing-key", b""), 0xcec9_41f3);
     }
 
     #[test]

@@ -227,6 +227,7 @@ pub(crate) struct MonitorClient {
     history: Arc<Mutex<VecDeque<Arc<MonitorState>>>>,
     errors: mpsc::Receiver<MonitorError>,
     terminal: watch::Receiver<Option<MonitorError>>,
+    refresh: mpsc::Sender<u32>,
     stop: watch::Sender<bool>,
     owner: Mutex<Option<JoinHandle<()>>>,
 }
@@ -245,6 +246,7 @@ impl MonitorClient {
         let history = Arc::new(Mutex::new(VecDeque::new()));
         let (errors_tx, errors) = mpsc::channel(config.error_capacity);
         let (terminal_tx, terminal) = watch::channel(None);
+        let (refresh, refresh_rx) = mpsc::channel(1);
         let (stop, stop_rx) = watch::channel(false);
         let owner_history = Arc::clone(&history);
         let owner = tokio::spawn(async move {
@@ -260,6 +262,7 @@ impl MonitorClient {
                 terminal: terminal_tx,
                 stop: stop_rx,
                 refresh_epoch: None,
+                refresh_rx,
                 foreign_seeds: HashSet::new(),
             }
             .run()
@@ -270,6 +273,7 @@ impl MonitorClient {
             history,
             errors,
             terminal,
+            refresh,
             stop,
             owner: Mutex::new(Some(owner)),
         })
@@ -317,6 +321,39 @@ impl MonitorClient {
         *self.terminal.borrow()
     }
 
+    pub(crate) async fn refresh_osdmap(&self, after: u32) -> Result<(), MonitorError> {
+        self.refresh
+            .send(after)
+            .await
+            .map_err(|_| self.terminal().unwrap_or(MonitorError::Closed))?;
+        let mut state = self.state.clone();
+        let mut terminal = self.terminal.clone();
+        loop {
+            if state
+                .borrow()
+                .osdmap()
+                .is_some_and(|map| map.epoch() > after)
+            {
+                return Ok(());
+            }
+            if let Some(error) = *terminal.borrow() {
+                return Err(error);
+            }
+            tokio::select! {
+                changed = state.changed() => {
+                    if changed.is_err() {
+                        return Err(MonitorError::Closed);
+                    }
+                }
+                changed = terminal.changed() => {
+                    if changed.is_err() {
+                        return Err(MonitorError::Closed);
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn close(&self) {
         let _ = self.stop.send(true);
     }
@@ -347,6 +384,7 @@ struct Owner {
     terminal: watch::Sender<Option<MonitorError>>,
     stop: watch::Receiver<bool>,
     refresh_epoch: Option<u32>,
+    refresh_rx: mpsc::Receiver<u32>,
     foreign_seeds: HashSet<SocketAddr>,
 }
 
@@ -428,6 +466,7 @@ impl Owner {
         Err(MonitorError::AttemptsExhausted)
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_session(&mut self, opened: OpenedMonitorSession) -> SessionOutcome {
         let session = opened.session;
         self.state.global_id = Some(opened.global_id);
@@ -451,6 +490,7 @@ impl Owner {
                 Incoming(Option<Message>),
                 Failure(SessionError),
                 Subscribe,
+                Refresh(Option<u32>),
             }
             let event = tokio::select! {
                 changed = self.stop.changed() => {
@@ -460,6 +500,7 @@ impl Owner {
                 message = session.next_incoming() => Event::Incoming(message),
                 error = session.next_failure() => Event::Failure(error),
                 () = &mut timer => Event::Subscribe,
+                epoch = self.refresh_rx.recv() => Event::Refresh(epoch),
             };
             match event {
                 Event::Stop => {
@@ -521,6 +562,16 @@ impl Owner {
                         .as_mut()
                         .reset(tokio::time::Instant::now() + self.config.subscribe_period);
                 }
+                Event::Refresh(Some(epoch)) => {
+                    self.refresh_epoch = Some(
+                        self.refresh_epoch
+                            .map_or(epoch, |current| current.max(epoch)),
+                    );
+                    if let Err(error) = self.subscribe(&session, true).await {
+                        self.report(error);
+                    }
+                }
+                Event::Refresh(None) => {}
             }
         }
     }
@@ -722,6 +773,7 @@ pub(crate) fn authenticated_session_factory(
     connector_config: crate::cephx::connector::Config,
     session_config: SessionConfig,
     connect_timeout: Duration,
+    authority_slot: Arc<std::sync::RwLock<Option<Arc<crate::cephx::connector::MonitorConnector>>>>,
 ) -> SessionFactory {
     use crate::cephx::connector::MonitorConnector;
 
@@ -730,6 +782,7 @@ pub(crate) fn authenticated_session_factory(
         connector_config.target_address = endpoint.entity_address.clone();
         let mut session_config = session_config.clone();
         session_config.client_ident.target_address = endpoint.entity_address.clone();
+        let authority_slot = Arc::clone(&authority_slot);
         Box::pin(async move {
             if connect_timeout.is_zero() {
                 return Err(MonitorError::InvalidConfig);
@@ -751,6 +804,9 @@ pub(crate) fn authenticated_session_factory(
             let global_id = initial
                 .authenticated_global_id
                 .ok_or(MonitorError::IdentityUnavailable)?;
+            *authority_slot
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(&authority));
             let retry_authority = Arc::clone(&authority);
             let retry_endpoint = endpoint.address;
             let connector: Connector = Arc::new(move || {
@@ -1412,6 +1468,7 @@ mod tests {
         let (errors, _) = mpsc::channel(8);
         let (terminal, _) = watch::channel(None);
         let (_, stop) = watch::channel(false);
+        let (_, refresh_rx) = mpsc::channel(1);
         (
             Owner {
                 config: config(),
@@ -1425,6 +1482,7 @@ mod tests {
                 terminal,
                 stop,
                 refresh_epoch: None,
+                refresh_rx,
                 foreign_seeds: HashSet::new(),
             },
             state,

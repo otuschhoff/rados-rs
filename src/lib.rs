@@ -15,6 +15,8 @@ mod mon;
 #[allow(dead_code)]
 mod msgr;
 mod operation;
+#[allow(dead_code)]
+mod osd;
 #[cfg(feature = "r04-integration")]
 #[doc(hidden)]
 pub mod r04_integration;
@@ -24,6 +26,9 @@ pub mod r05_integration;
 #[cfg(feature = "r06-integration")]
 #[doc(hidden)]
 pub mod r06_integration;
+#[cfg(all(feature = "r07-integration", not(rados_packaged_source)))]
+#[doc(hidden)]
+pub mod r07_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool};

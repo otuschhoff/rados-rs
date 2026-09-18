@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "started_at", "finished_at", "controller_sha256", "fixture_sha256", "rust", "go", "server", "cluster", "scenarios", "probe", "go_probe"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite_id": {"const": "r07/read-only-live-v1"},
+    "status": {"const": "passed"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "controller_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "fixture_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256", "features", "build_command", "build_exit_code", "probe_exit_code", "stdout_sha256"],
+      "properties": {
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "compiler_image": {"const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922"},
+        "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+        "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "features": {"const": []},
+        "build_command": {"const": "cargo build --locked --release -p rados-r07-tools --bin rados-r07-live"},
+        "build_exit_code": {"const": 0}, "probe_exit_code": {"const": 0},
+        "stdout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "go": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "compiler", "platform", "binary_sha256", "adapter_sha256", "build_command", "build_exit_code", "probe_exit_code", "stdout_sha256"],
+      "properties": {
+        "revision": {"const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4"},
+        "tree": {"const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7"},
+        "compiler": {"const": "go1.26.8"},
+        "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+        "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "adapter_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "build_command": {"const": "go build -trimpath ./integration/r07/probe"},
+        "build_exit_code": {"const": 0}, "probe_exit_code": {"const": 0},
+        "stdout_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": {"const": "7f793731f1b39eb4f465e960113d2363c311b964"},
+        "version": {"const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"},
+        "image": {"const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"},
+        "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "cluster": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fsid", "osds", "pool", "replicas"],
+      "properties": {
+        "fsid": {"const": "11111111-2222-4333-8444-666666666666"},
+        "osds": {"const": 3}, "pool": {"const": "p06-data"}, "replicas": {"const": 2}
+      }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["native_contents", "go_differential", "ranged_read", "full_read", "empty_read", "namespace_read", "locator_read", "stat_metadata", "missing_object", "operation_version", "primary_change"],
+      "properties": {
+        "native_contents": {"const": "passed"}, "go_differential": {"const": "passed"}, "ranged_read": {"const": "passed"},
+        "full_read": {"const": "passed"}, "empty_read": {"const": "passed"},
+        "namespace_read": {"const": "passed"}, "locator_read": {"const": "passed"},
+        "stat_metadata": {"const": "passed"}, "missing_object": {"const": "passed"},
+        "operation_version": {"const": "passed"}, "primary_change": {"const": "passed"}
+      }
+    },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ranged_read", "full_read", "empty_read", "namespace_read", "locator_read", "stat", "missing", "primary_change", "stat_size", "stat_mtime_seconds", "stat_mtime_nanosecond", "version"],
+      "properties": {
+        "ranged_read": {"const": true}, "full_read": {"const": true}, "empty_read": {"const": true},
+        "namespace_read": {"const": true}, "locator_read": {"const": true}, "stat": {"const": true},
+        "missing": {"const": true}, "primary_change": {"const": true}, "stat_size": {"const": 4096},
+        "stat_mtime_seconds": {"type": "integer", "minimum": 1}, "stat_mtime_nanosecond": {"type": "integer", "minimum": 0, "maximum": 999999999},
+        "version": {"type": "integer", "minimum": 1}
+      }
+    },
+    "go_probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ranged_read", "full_read", "empty_read", "namespace_read", "locator_read", "stat", "missing", "primary_change", "stat_size", "stat_mtime_seconds", "stat_mtime_nanosecond", "version"],
+      "properties": {
+        "ranged_read": {"const": true}, "full_read": {"const": true}, "empty_read": {"const": true},
+        "namespace_read": {"const": true}, "locator_read": {"const": true}, "stat": {"const": true},
+        "missing": {"const": true}, "primary_change": {"const": true}, "stat_size": {"const": 4096},
+        "stat_mtime_seconds": {"type": "integer", "minimum": 1}, "stat_mtime_nanosecond": {"type": "integer", "minimum": 0, "maximum": 999999999},
+        "version": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

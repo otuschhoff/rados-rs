@@ -60,6 +60,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Verify package contents
         run: cargo package --locked
+      - name: Verify checked-in R07 evidence
+        run: cargo run --locked -p rados-r07-tools --bin rados-r07-verify -- . docs/r07/live-integration-report.json
       - name: Install pinned audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -118,3 +120,8 @@ jobs:
           cargo +nightly-2026-09-01 fuzz run r06_crush_place /tmp/rados-r06-corpus/r06_crush_place -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r06_object_mapping /tmp/rados-r06-corpus/r06_object_mapping -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r06_osdmap_place_object /tmp/rados-r06-corpus/r06_osdmap_place_object -- -max_total_time=10
+      - name: Run read-only object fuzz smoke tests
+        run: |
+          integration/r07/prepare-fuzz-corpus.sh /tmp/rados-r07-corpus
+          cargo +nightly-2026-09-01 fuzz run r07_osd_reply /tmp/rados-r07-corpus/r07_osd_reply -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r07_osd_backoff /tmp/rados-r07-corpus/r07_osd_backoff -- -max_total_time=10

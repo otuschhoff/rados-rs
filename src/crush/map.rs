@@ -134,8 +134,8 @@ impl Map {
             straw_calc_version: 0,
             allowed_bucket_algorithms: (1 << 1) | (1 << 2) | (1 << 4),
             chooseleaf_stable: 0,
-            msr_descents: 0,
-            msr_collision_tries: 0,
+            msr_descents: 100,
+            msr_collision_tries: 100,
             class_shadow_buckets: std::collections::BTreeSet::new(),
         };
 
@@ -488,6 +488,17 @@ mod tests {
         assert_eq!(rule.steps[1].operation, RULE_CHOOSELEAF_FIRST_N);
         assert_eq!(decoded.choose_total_tries, 50);
         assert_eq!(decoded.chooseleaf_stable, 1);
+    }
+
+    #[test]
+    fn omitted_msr_tunables_use_native_defaults() {
+        let mut encoded = encode_test_map(BUCKET_STRAW2, RULE_CHOOSELEAF_FIRST_N);
+        encoded.truncate(encoded.len() - 8);
+        let decoded = Map::decode(&encoded, test_decode_limits()).expect("decode pre-MSR map");
+        assert_eq!(
+            (decoded.msr_descents, decoded.msr_collision_tries),
+            (100, 100)
+        );
     }
 
     #[test]

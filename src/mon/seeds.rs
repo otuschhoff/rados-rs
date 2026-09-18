@@ -648,7 +648,10 @@ mod tests {
         .unwrap();
         assert_eq!(endpoints[0].address, "[2001:db8::1]:4400".parse().unwrap());
         assert_eq!(endpoints[1].address, "192.0.2.8:5500".parse().unwrap());
-        assert_eq!(endpoints[0].entity_address.endpoint(), None);
+        assert_eq!(
+            endpoints[0].entity_address.endpoint(),
+            Some("[2001:db8::1]:4400".parse().unwrap())
+        );
     }
 
     #[tokio::test]

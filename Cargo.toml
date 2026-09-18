@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -28,6 +28,7 @@ rust-version.workspace = true
 publish = false
 include = [
     "/src/**",
+    "!/src/r07_integration.rs",
     "/examples/**",
     "/docs/RUST_PORT_SPEC.md",
     "/docs/decisions/**",
@@ -74,6 +75,7 @@ name = "rados"
 r04-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
 r05-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
 r06-integration = []
+r07-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
 
 [[bin]]
 name = "rados-r04-live"
