@@ -1,7 +1,7 @@
 pub(crate) mod banner;
 pub(crate) mod control;
 pub(crate) mod frame;
-mod message;
+pub(crate) mod message;
 pub(crate) mod secure;
 pub(crate) mod session;
 pub(crate) mod supervisor;

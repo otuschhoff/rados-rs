@@ -22,6 +22,7 @@ cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
 hmac = "=0.13.0"
 libfuzzer-sys = "=0.4.13"
+rados = { package = "rados-rs", path = "..", features = ["r05-integration"] }
 sha2 = "=0.11.0"
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
@@ -120,6 +121,55 @@ bench = false
 [[bin]]
 name = "cephx_authorizer"
 path = "fuzz_targets/cephx_authorizer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_config"
+path = "fuzz_targets/r05_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_monmap"
+path = "fuzz_targets/r05_monmap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_osdmap"
+path = "fuzz_targets/r05_osdmap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_osdmap_incremental"
+path = "fuzz_targets/r05_osdmap_incremental.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_monmap_message"
+path = "fuzz_targets/r05_monmap_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_osdmap_full_message"
+path = "fuzz_targets/r05_osdmap_full_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r05_osdmap_incremental_message"
+path = "fuzz_targets/r05_osdmap_incremental_message.rs"
 test = false
 doc = false
 bench = false

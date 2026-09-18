@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-#[allow(dead_code)]
+#[allow(dead_code, unexpected_cfgs)]
 #[path = "../../../src/cephx/mod.rs"]
 mod cephx;
 #[allow(dead_code, unused_imports)]

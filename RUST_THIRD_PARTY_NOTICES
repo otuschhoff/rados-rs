@@ -11,12 +11,17 @@ crc32c v0.6.8
   Copyright: Zack Owens and contributors
   Source: https://github.com/zowens/crc32c
 
+hickory-resolver v0.26.3
+  License: MIT OR Apache-2.0
+  Copyright: The contributors to Hickory DNS
+  Source: https://github.com/hickory-dns/hickory-dns
+
 tokio v1.47.1
   License: MIT
   Copyright: Tokio Contributors
   Source: https://github.com/tokio-rs/tokio
 
-zeroize v1.8.2
+zeroize v1.9.0
   License: Apache-2.0 OR MIT
   Copyright: Tony Arcieri and contributors
   Source: https://github.com/RustCrypto/utils/tree/master/zeroize

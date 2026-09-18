@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture": "monmap-v9.bin",
+  "sha256": "d575f2f1267aaad35803d0c7fbd61bd0d1ab00ac7837bb6210a835a0d4c3e3da",
+  "kind": "upstream-derived",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/mon/MonMap.h", "src/mon/MonMap.cc"],
+    "files": {
+      "src/mon/MonMap.h": "0e7f2900cca378f4cad87cb406d594ba63fb0bb0b77c3f00fabe0ff59a94d430",
+      "src/mon/MonMap.cc": "3d6c7bd935f3b4042b796f6f164d75da3c9a6763ed87e2cedacfc68764958b98"
+    },
+    "references": [{"type":"ceph-source","locator":"https://github.com/ceph/ceph.git","revision":"7f793731f1b39eb4f465e960113d2363c311b964","role":"MonMap wire structure and ceph-dencoder fixture generation"}]
+  },
+  "generator": {"tool":"ceph-dencoder","version":"ceph version 20.2.4","command":["./integration/p04/reproduce-fixtures.sh"],"image":"quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"},
+  "secrets": {"contains_secrets":false,"synthetic_only":true},
+  "license": {"upstream_expression":"LGPL-2.1-or-later","redistribution":"pending","reviewed_by":"pending"}
+}

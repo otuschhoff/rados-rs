@@ -4,7 +4,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use zeroize::{Zeroize, Zeroizing};
 
-#[cfg(not(any(fuzzing, feature = "fuzzing")))]
+#[cfg(any(not(feature = "fuzzing"), feature = "r05-integration"))]
 pub(crate) mod connector;
 pub(crate) mod core;
 pub(crate) mod crypto;

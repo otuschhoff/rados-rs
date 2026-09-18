@@ -348,6 +348,7 @@ impl MonitorConnector {
         Ok(ConnectionSetup {
             stream: Box::new(stream),
             codec: transport_codec,
+            requires_identification: true,
             authenticated_global_id: Some(done.global_id),
             credential_identity: Some(identity),
             renewal_after,
@@ -623,6 +624,7 @@ impl ServiceConnector {
         Ok(ConnectionSetup {
             stream: Box::new(stream.into_inner()),
             codec: transport_codec,
+            requires_identification: true,
             authenticated_global_id: Some(global_id),
             credential_identity: Some(credential_identity(&metadata)),
             renewal_after,

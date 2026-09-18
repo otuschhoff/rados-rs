@@ -16,6 +16,7 @@ use super::transport::{Codec, Connection, Event as TransportEvent, IoStream};
 pub(crate) struct ConnectionSetup {
     pub(crate) stream: Box<dyn IoStream>,
     pub(crate) codec: Codec,
+    pub(crate) requires_identification: bool,
     pub(crate) authenticated_global_id: Option<u64>,
     pub(crate) credential_identity: Option<[u8; 32]>,
     pub(crate) renewal_after: Option<Duration>,
@@ -223,7 +224,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 
     use super::*;
-    use crate::msgr::control::ClientIdent;
+    use crate::msgr::control::{ClientIdent, ServerIdent};
     use crate::msgr::frame::{CrcCodec, Limits, Tag};
     use crate::msgr::message::{MessageHeader, MessageLengths};
     use crate::msgr::session::{Config, ReconnectPolicy};
@@ -248,6 +249,10 @@ mod tests {
     }
 
     fn machine(max_queued_messages: usize) -> Machine {
+        machine_with_server_cookie(max_queued_messages, 2)
+    }
+
+    fn machine_with_server_cookie(max_queued_messages: usize, server_cookie: u64) -> Machine {
         let address = address();
         Machine::new(Config {
             limits: LIMITS,
@@ -268,7 +273,7 @@ mod tests {
                 cookie: 0,
             },
             client_cookie: 1,
-            server_cookie: 2,
+            server_cookie,
             global_sequence: 0,
             connect_sequence: 0,
             replacement_cookies: vec![3, 4, 5],
@@ -293,10 +298,65 @@ mod tests {
             codec: Codec::Crc(CrcCodec {
                 with_data_crc: true,
             }),
+            requires_identification: false,
             authenticated_global_id: None,
             credential_identity: None,
             renewal_after: None,
         }
+    }
+
+    #[tokio::test]
+    async fn authenticated_initial_connection_identifies_before_ready() {
+        let codec = CrcCodec {
+            with_data_crc: true,
+        };
+        let (client, mut server) = duplex(8192);
+        let mut connection = setup(client);
+        connection.requires_identification = true;
+        connection.authenticated_global_id = Some(42);
+        let session = Session::spawn(machine_with_server_cookie(4, 0), Some(connection), None);
+
+        let frame = codec
+            .read_async(&mut server, LIMITS)
+            .await
+            .expect("client identification frame");
+        assert!(matches!(
+            Control::decode(&frame, LIMITS),
+            Ok(Control::ClientIdent(ClientIdent { global_id: 42, .. }))
+        ));
+        assert_eq!(
+            session.snapshot().await.expect("connecting snapshot").state,
+            super::super::session::State::Connecting
+        );
+
+        let target = address();
+        let reply = Control::ServerIdent(ServerIdent {
+            addresses: EntityAddrVec(vec![target]),
+            global_id: 7,
+            global_sequence: 1,
+            supported_features: 0,
+            required_features: 0,
+            flags: 0,
+            cookie: 9,
+        })
+        .encode(LIMITS)
+        .expect("server identification");
+        server
+            .write_all(&codec.encode(&reply, LIMITS).expect("server wire"))
+            .await
+            .expect("inject server identification");
+
+        loop {
+            if matches!(
+                session.next_event().await,
+                Some(SessionEvent::StateChanged(
+                    super::super::session::State::Ready
+                ))
+            ) {
+                break;
+            }
+        }
+        session.shutdown().await;
     }
 
     #[tokio::test]
@@ -603,18 +663,28 @@ async fn run_owner(
         unreported_dropped_events: 0,
     };
 
-    let ready = initial.is_some();
-    owner.drive(Input::Start { ready }).await;
     if let Some(setup) = initial {
-        let generation = owner.machine.snapshot().generation;
-        owner
-            .drive(Input::InitialIdentity {
-                generation,
+        let effects = if setup.requires_identification {
+            owner.machine.step(Input::InitialConnection {
                 authenticated_global_id: setup.authenticated_global_id,
                 credential_identity: setup.credential_identity,
             })
-            .await;
+        } else {
+            let mut effects = owner.machine.step(Input::Start { ready: true });
+            let generation = owner.machine.snapshot().generation;
+            effects.extend(owner.machine.step(Input::InitialIdentity {
+                generation,
+                authenticated_global_id: setup.authenticated_global_id,
+                credential_identity: setup.credential_identity,
+            }));
+            effects
+        };
+        let generation = owner.machine.snapshot().generation;
         owner.install(generation, setup);
+        owner.apply(effects).await;
+        owner.dispatch().await;
+    } else {
+        owner.drive(Input::Start { ready: false }).await;
     }
 
     loop {

@@ -9,6 +9,7 @@ mod wire {
     pub(crate) use crc::crc32c;
 }
 
+#[allow(unexpected_cfgs)]
 mod cephx {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/cephx/mod.rs"));
 }

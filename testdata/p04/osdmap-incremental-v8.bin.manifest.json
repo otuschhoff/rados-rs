@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture": "osdmap-incremental-v8.bin",
+  "sha256": "57ee8c961bac016deb512b6f741b66231a9c337bc1bdfce0b54ef9697c0b9763",
+  "kind": "upstream-derived",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/osd/OSDMap.h", "src/osd/OSDMap.cc"],
+    "files": {
+      "src/osd/OSDMap.h": "fd23f57b98235d6c36af2f2559c4bf3082c47d93a463b4cd6c84b7f91267cf36",
+      "src/osd/OSDMap.cc": "36b74d8c998da9c93b7b0c9ba3ecac5d3e9df26bfb99c2f22095b37da44e0dc8"
+    },
+    "references": [{"type":"ceph-source","locator":"https://github.com/ceph/ceph.git","revision":"7f793731f1b39eb4f465e960113d2363c311b964","role":"OSDMap::Incremental wire structure and ceph-dencoder fixture generation"}]
+  },
+  "generator": {"tool":"ceph-dencoder","version":"ceph version 20.2.4","command":["./integration/p04/reproduce-fixtures.sh"],"image":"quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"},
+  "secrets": {"contains_secrets":false,"synthetic_only":true},
+  "license": {"upstream_expression":"LGPL-2.1-or-later","redistribution":"pending","reviewed_by":"pending"}
+}

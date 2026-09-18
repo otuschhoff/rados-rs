@@ -62,6 +62,10 @@ pub(crate) enum Input {
     Start {
         ready: bool,
     },
+    InitialConnection {
+        authenticated_global_id: Option<u64>,
+        credential_identity: Option<[u8; 32]>,
+    },
     InitialIdentity {
         generation: u64,
         authenticated_global_id: Option<u64>,
@@ -312,10 +316,25 @@ impl Machine {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn step(&mut self, input: Input) -> Vec<Effect> {
         let mut effects = Vec::new();
         match input {
             Input::Start { ready } => self.start(ready, &mut effects),
+            Input::InitialConnection {
+                authenticated_global_id,
+                credential_identity,
+            } => {
+                if self.state == State::Disconnected && !self.connect_pending {
+                    self.connect_pending = true;
+                    self.connected(
+                        self.generation,
+                        authenticated_global_id,
+                        credential_identity,
+                        &mut effects,
+                    );
+                }
+            }
             Input::InitialIdentity {
                 generation,
                 authenticated_global_id,

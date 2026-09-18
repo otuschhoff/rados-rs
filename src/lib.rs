@@ -7,11 +7,18 @@ mod config;
 mod error;
 mod identity;
 #[allow(dead_code)]
+mod maps;
+#[allow(dead_code)]
+mod mon;
+#[allow(dead_code)]
 mod msgr;
 mod operation;
 #[cfg(feature = "r04-integration")]
 #[doc(hidden)]
 pub mod r04_integration;
+#[cfg(feature = "r05-integration")]
+#[doc(hidden)]
+pub mod r05_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool};

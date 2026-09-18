@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "command": "integration/r05/live-reproduce.sh",
+  "started_at": "2026-09-18T01:59:53Z",
+  "finished_at": "2026-09-18T02:01:02Z",
+  "source": {
+    "identity": "exact-content-addressed-artifacts",
+    "artifacts": {
+      "Cargo.lock": "b2f5680b93be021929f47377a4a097781def28022c676b9b888ba96aafa398c7",
+      "Cargo.toml": "da48d7f028b79bfd1cdacede7389d172a4391879b6e4d437236e1bba0bc5bdac",
+      "build.rs": "57f7cb9849823837ac1a96ae5290d19b4a113a75d90a46661dd5460aa44d9b6c",
+      "integration/r05/live-report.schema.json": "fee67245a677c17618527ff4302d4125f32bc32c4056eb7d4625efcce1c4cdcd",
+      "integration/r05/live-reproduce.sh": "8a9c2a17d717f6afba6faf786f24eb6cf548f2772b462ddcb4dd28a9feec1a2c",
+      "integration/r05/verify-live-tests.sh": "2e57ce6dc85a73cb713477b43217ce3b506f8f39e4d66a806ad3e7c1662defeb",
+      "integration/r05/verify-live.rb": "f714d4e599dbff6d88f45eba692d7238c54482a4e78d616fe4eb5cc4f11e6251",
+      "rust-toolchain.toml": "416f4fc79fdd19f5d779c0715cc333fdfa5ced039d0d1449e4b3dfc9f356a31d",
+      "src/bin/rados-r04-live.rs": "721be579266900e8d80bcf8ba6531bedd4b18c4f72b65a2d47e5a05e48dfed3c",
+      "src/bin/rados-r05-live.rs": "0f1c4c4c47ce946b55e25c2fe47a8fff7cdf63831e2ee4269961c083fa87fcf1",
+      "src/cephx/connector.rs": "0fa7f95a45b096e6ed6fa6450d50bd911adf6bd16c724719fa9d0130dc10d61e",
+      "src/cephx/core.rs": "bd4cb0791d1b851a4411a7986a61b63f010ba1ab5ab7a65000b13bb9e476270a",
+      "src/cephx/crypto.rs": "84ca6148860491b7f9054805f8cc3bd4dcf0aa3f3ccee848d24c2d2a4183bc91",
+      "src/cephx/fixture_tests.rs": "5bcbe9fbddd908d112556af82fc5bcf3daa2d41e1a518cbd17ff0901bcee531a",
+      "src/cephx/mod.rs": "5cdbe0b210527ac129eb3b34e88c2bc51f3b4835c4aee372f7e6df5f9c398f1a",
+      "src/client.rs": "38f813d2a9ab9358ead704488501744dc4849313ef7d0b38f79ab9ca1626dac1",
+      "src/config.rs": "c7b3a9014252b37a7e70fac3109cfb76bcfe017ee450aefa88dae94c9415ecb9",
+      "src/entity_name.rs": "f87215802a7e312ced4068b31099b09eec918d0c90107316e7a9cc6afe8d0f2b",
+      "src/error.rs": "a242ea53af368bb744fff210868283a99122f4c04b87b262a86f7b341dc72632",
+      "src/identity.rs": "25b969fd8a28ab767a615298eb7106c1920ed2a7ee7a070aa79f9898204fc219",
+      "src/lib.rs": "82be076b8de46c5d77f55f41ca480acf702c7b0858a7ab411f91d218c7c21677",
+      "src/maps/fixture_tests.rs": "de50ecc05907ed7cf998bc7970f1aa32265c6775de074d0768f4b20c68c08a8b",
+      "src/maps/incremental.rs": "1d813e37e4bace700b76586245272a6c3bdb24108d869577cfe9b69b31cac162",
+      "src/maps/mgrmap.rs": "e152c125a2d2138f90b595e2301019da5c75c960adebb8969ebea83b879379e8",
+      "src/maps/mod.rs": "025b383ca2f6b02bb87a62b2bc21a8336b83b841d57c68e107539d5e50f9e9d6",
+      "src/maps/monmap.rs": "46db53d6ca167506bc95c5ef0f83f4d369bde498bcd21b383d89fa0dcec31c62",
+      "src/maps/osdmap.rs": "4b3085b6843564ecfa6f14e67a593a3e56148dfe3f6af115156dd1d24c9afbc7",
+      "src/maps/pool.rs": "2001492ee9fa1319acb7ad6ac2ae57a28008b6b049d71e5ae4a7aaa10e7d9d96",
+      "src/maps/store.rs": "9ffa4ff22fff882dfe169e504598fd4a9fb7f369bb0398647e1b1027c68fed3a",
+      "src/mon/client.rs": "26aaef845cc4a98b3e5eec0b2e733e117c20366c9976e49b98d4146d472bdceb",
+      "src/mon/messages.rs": "c72d65da75bb98ba19a4562d3dcb090f15d7fd81f9b09f445c1a3e845bf1ac69",
+      "src/mon/mod.rs": "ef247425d7bcd95473236647f3352652cff54ada1101f5c885948603366b7d7f",
+      "src/mon/seeds.rs": "3af56e18cbb1f3d0221b0e489014b2b14b86ab9aa1131d76a930890532ce4389",
+      "src/msgr/banner.rs": "18facb1ad47f17ff68caa94aba104b4f9923605caad687259bc2a3b860d0cbc2",
+      "src/msgr/control.rs": "f37f5b4e2d99559418b6e9967d12382aec32569ee1b1373522ab9cf3804b2d04",
+      "src/msgr/fixture_tests.rs": "a9aef256da4b8e86ab2bb1ac2d9ccf10c976710d93a6382f027b675a44500458",
+      "src/msgr/frame.rs": "e0dea72e5b959a0797e482b152343cfec9c8cfaf439d8d93d707e710436dcb9c",
+      "src/msgr/message.rs": "7a70a4f679a78420b0a5009718e122cde47bcb06cd4cc8aad5bee40fca58e76b",
+      "src/msgr/mod.rs": "60c3d10e2ba90ca164a6b09aee913bf90d40bd7f26aa3c706b31980859fd61a6",
+      "src/msgr/secure.rs": "33e57fc1fa9dd9c7f5a31021823fca1008db3421c018247014af6a75b20bd2cf",
+      "src/msgr/session.rs": "ef3ee3a67355f8a2e283df9113f44175f7ed5ed1543fcda552a59ddcea1103a9",
+      "src/msgr/supervisor.rs": "f788019dd0484903cb770691f317b065e89c51ef41ed916f62ea01c074235c90",
+      "src/msgr/transport.rs": "0ee4b7504805ed85657fe253bbdcdca9a5dfbc92afd17d69b13eb41bf5cbbf3e",
+      "src/operation.rs": "a2acc328adb4e77c9f1306275db7e131dfa72506092709acb48d6dc14a909e3b",
+      "src/protocol/address.rs": "1d7442f85dbf8b835e262db0257299b8f5d3ecbf89ba82df210de9084fdd4492",
+      "src/protocol/errno.rs": "adda487a0b710a6b00b82e31dca54c5959c5bd3575e308db8d19c601d3890792",
+      "src/protocol/features.rs": "3577d76b8adba382f526cd8afa0fda51e6caa03b18496c5697290c29b87f422d",
+      "src/protocol/mod.rs": "26dd139756a554a2760f2608cbf0abb30e5d041fb404066489026dd4cc5d399b",
+      "src/r04_integration.rs": "c5658639f32fadeffeb865cf5438c139bcc61dc00d3e8c5d9cc876022ca30602",
+      "src/r05_integration.rs": "ce55f0ec32af6e70926b14e4741f17f213ca4e85c130d44b09ca9e15f1cd2862",
+      "src/types.rs": "cb104b23043862fb4016be187c38673bbe917566998f259f97f827f7ba7bba38",
+      "src/wire/codec.rs": "1dcae53556dea2f77e602ecfbecef577bd29bf00dc48c1a05ea8f28a0c1f7a4e",
+      "src/wire/crc.rs": "1e0e9d48418a5f7e78ee753b1ed843a6f08f41021f6c632e8d58ef28fa131066",
+      "src/wire/mod.rs": "13285f9f408224b46833e881c4f1a9bbcf63bc5765e9a4c24857ba0397bd760c"
+    }
+  },
+  "server": {
+    "image": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa",
+    "image_id": "sha256:4cea72158e4469bdb125eda5e40638388a2117e71a02651d00e8147a66bc0a3b",
+    "ceph_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "platform": "linux/arm64"
+  },
+  "toolchain": {
+    "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+    "cargo": "cargo 1.98.0 (797e8a9bc 2026-08-05)",
+    "build_image": "rust@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922",
+    "build_image_id": "sha256:85d3116eeb31c371bc51214ee0d7f4c5655d5b6f903d448fff4d1ed8af272fd2",
+    "probe_binary_path": "target/r05/rados-r05-live",
+    "probe_binary_sha256": "2d142600a1ea005e18054931f59b0979f3da0aff856241262c63d3dcee61ee68"
+  },
+  "cluster": {
+    "fsid": "51111111-2222-4333-8444-555555555555",
+    "monitors": [
+      "v2:172.30.105.10:3300",
+      "v2:172.30.105.11:3300",
+      "v2:172.30.105.12:3300"
+    ],
+    "seeds_used": [
+      "v2:172.30.105.10:3300",
+      "v2:172.30.105.11:3300",
+      "v2:172.30.105.12:3300"
+    ],
+    "initial_pool": "r05-initial",
+    "disposable_pool": "r05-disposable",
+    "failover_pool": "r05-failover",
+    "quorum_before": 3,
+    "quorum_after_loss": 2
+  },
+  "bounds": {
+    "harness_seconds": 600,
+    "probe_seconds": 120,
+    "command_seconds": 20,
+    "max_output_bytes": 65536,
+    "max_report_bytes": 262144
+  },
+  "scenarios": {
+    "secure_default_v2": "passed",
+    "expected_pools": "passed",
+    "pool_map_updates": "passed",
+    "monitor_failover": "passed",
+    "wrong_fsid": "passed",
+    "bounded_cleanup": "passed"
+  },
+  "observations": {
+    "probe": {
+      "authenticated": true,
+      "configured_security": "secure",
+      "created_pools": [
+        "r05-disposable",
+        "r05-initial"
+      ],
+      "deleted_pools": [
+        "r05-initial"
+      ],
+      "failover_pools": [
+        "r05-failover",
+        "r05-initial"
+      ],
+      "fsid": "51111111-2222-4333-8444-555555555555",
+      "initial_pools": [
+        "r05-initial"
+      ],
+      "instance_id": 4120,
+      "schema_version": 1
+    },
+    "wrong_fsid": {
+      "exit_code": 1,
+      "stderr_sha256": "bfe56646dd848280929af91a394b8974a63e7f07ed018484be0697a8d2df923e",
+      "fsid_mismatch_observed": true
+    },
+    "cleanup": {
+      "orphan_containers": 0,
+      "orphan_networks": 0
+    }
+  }
+}

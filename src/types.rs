@@ -85,6 +85,16 @@ impl OperationOptions {
         }
         Ok(())
     }
+
+    pub(crate) const fn deadline(&self) -> Option<Instant> {
+        self.deadline
+    }
+
+    pub(crate) fn is_canceled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_canceled)
+    }
 }
 
 /// Object metadata returned with read and stat results.

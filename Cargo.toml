@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -11,7 +11,7 @@ rust-version = "1.98.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)", "cfg(feature, values(\"fuzzing\"))"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)", "cfg(rados_packaged_source)", "cfg(feature, values(\"fuzzing\"))"] }
 
 [workspace.lints.clippy]
 all = "deny"
@@ -36,8 +36,12 @@ include = [
     "/docs/r02/**",
     "/docs/r03/**",
     "/docs/r04/**",
+    "/docs/r05/**",
     "/reference/**",
-    "/integration/**",
+    "/integration/r01/**",
+    "/integration/r02/**",
+    "/integration/r03/**",
+    "/integration/r04/**",
     "/testdata/README.md",
     "/testdata/manifest.schema.json",
     "/testdata/p01/entity-name-client-1.bin",
@@ -55,6 +59,7 @@ include = [
     "/testdata/p02/**",
     "/testdata/p03/**",
     "/Cargo.toml",
+    "/build.rs",
     "/Cargo.lock",
     "/LICENSE",
     "/README.md",
@@ -67,11 +72,17 @@ name = "rados"
 
 [features]
 r04-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
+r05-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
 
 [[bin]]
 name = "rados-r04-live"
 path = "src/bin/rados-r04-live.rs"
 required-features = ["r04-integration"]
+
+[[bin]]
+name = "rados-r05-live"
+path = "src/bin/rados-r05-live.rs"
+required-features = ["r05-integration"]
 
 [dependencies]
 aes = "=0.9.3"
@@ -80,11 +91,12 @@ base64 = "=0.22.1"
 cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
 getrandom = "=0.4.3"
+hickory-resolver = { version = "=0.26.3", default-features = false, features = ["system-config", "tokio"] }
 hmac = "=0.13.0"
 sha2 = "=0.11.0"
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"], optional = true }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
-tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
