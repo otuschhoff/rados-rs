@@ -69,6 +69,21 @@ jobs:
           cargo audit --deny warnings
           cargo deny check advisories bans licenses sources
 
+  r06-qualification:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.98.0 --profile minimal
+      - name: Check out pinned Go oracle
+        run: |
+          git clone --no-checkout https://github.com/otuschhoff/rados-go.git /tmp/rados-go
+          git -C /tmp/rados-go checkout --detach c8bb148a1379b51ef87256c27f366a05f8da4dc4
+      - name: Run deterministic placement bridge
+        run: integration/r06/reproduce.sh --go-root /tmp/rados-go --report target/r06/report.json
+
   fuzz-smoke:
     runs-on: ubuntu-24.04
     steps:
@@ -96,3 +111,10 @@ jobs:
           cargo +nightly-2026-09-01 fuzz run controls /tmp/rados-r03-corpus/controls -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run messages /tmp/rados-r03-corpus/messages -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run bounded_session_scripts /tmp/rados-r03-corpus/bounded_session_scripts -- -max_total_time=10
+      - name: Run placement fuzz smoke tests
+        run: |
+          integration/r06/prepare-fuzz-corpus.sh /tmp/rados-r06-corpus
+          cargo +nightly-2026-09-01 fuzz run r06_crush_decode /tmp/rados-r06-corpus/r06_crush_decode -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r06_crush_place /tmp/rados-r06-corpus/r06_crush_place -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r06_object_mapping /tmp/rados-r06-corpus/r06_object_mapping -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r06_osdmap_place_object /tmp/rados-r06-corpus/r06_osdmap_place_object -- -max_total_time=10

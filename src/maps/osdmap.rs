@@ -99,6 +99,65 @@ impl OSDMap {
     }
 }
 
+#[cfg(feature = "r06-integration")]
+pub(crate) fn r06_osd_map(
+    crush_data: Vec<u8>,
+    crush_rule: u8,
+    pg_count: u32,
+    osd_weight: Vec<u32>,
+    pg_upmap_items: HashMap<PG, Vec<OSDRemap>>,
+) -> OSDMap {
+    let osd_count = osd_weight.len();
+    let pool = Pool {
+        id: 1,
+        name: "r06-fuzz".into(),
+        pool_type: if crush_rule == 2 { 3 } else { 1 },
+        size: 3,
+        minimum_size: 0,
+        crush_rule,
+        object_hash: 2,
+        pg_count,
+        placement_pg_count: pg_count,
+        stripe_width: 0,
+        flags: 1,
+        snapshot_sequence: 0,
+        snapshots: std::collections::BTreeMap::new(),
+        erasure_code_profile: String::new(),
+        application_metadata: HashMap::new(),
+        options: HashMap::new(),
+    };
+    OSDMap {
+        fsid: Fsid([6; 16]),
+        epoch: 1,
+        created: UTime::default(),
+        modified: UTime::default(),
+        pools: HashMap::from([(1, pool)]),
+        name_to_id: HashMap::from([("r06-fuzz".into(), 1)]),
+        pool_max: 1,
+        flags: 0,
+        max_osd: i32::try_from(osd_count).unwrap_or(i32::MAX),
+        osd_state: vec![3; osd_count],
+        osd_weight,
+        client_addresses: vec![EntityAddrVec(Vec::new()); osd_count],
+        pg_temp: HashMap::new(),
+        primary_temp: HashMap::new(),
+        primary_affinity: Vec::new(),
+        crush_data,
+        erasure_code_profiles: HashMap::new(),
+        pg_upmap: HashMap::new(),
+        pg_upmap_items,
+        crush_version: 0,
+        new_removed_snapshots: HashMap::new(),
+        new_purged_snapshots: HashMap::new(),
+        last_up_change: UTime::default(),
+        last_in_change: UTime::default(),
+        pg_upmap_primaries: HashMap::new(),
+        crc: 0,
+        crc_verified: false,
+        applied_incremental: false,
+    }
+}
+
 pub(crate) fn decode_osdmap(data: &[u8], limits: Limits) -> Result<OSDMap> {
     validate_limits(limits)?;
     let mut decoder = Decoder::new(data, limits.max_bytes as usize);

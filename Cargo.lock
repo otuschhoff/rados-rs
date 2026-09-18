@@ -1023,7 +1023,19 @@ dependencies = [
 name = "rados-r05-tools"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "rados-rs",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rados-r06-tools"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "crc32c",
  "serde",
  "serde_json",
  "sha2",

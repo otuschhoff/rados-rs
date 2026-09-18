@@ -4,6 +4,8 @@
 mod cephx;
 mod client;
 mod config;
+#[allow(dead_code)]
+mod crush;
 mod error;
 mod identity;
 #[allow(dead_code)]
@@ -19,6 +21,9 @@ pub mod r04_integration;
 #[cfg(feature = "r05-integration")]
 #[doc(hidden)]
 pub mod r05_integration;
+#[cfg(feature = "r06-integration")]
+#[doc(hidden)]
+pub mod r06_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool};

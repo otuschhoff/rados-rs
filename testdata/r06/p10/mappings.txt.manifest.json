@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "fixture": "mappings.txt",
+  "sha256": "9eec5c1a02050535d04e595b5d0340d4d8ba678277a7d4c0cb683b9f309c72cc",
+  "kind": "native-oracle",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/crush/mapper.c", "src/crush/hash.c", "src/crush/crush_ln_table.h"],
+    "files": {
+      "src/crush/mapper.c": "d320fffa1a4b4b1c2d25b1c966f928b3d5ba2636889261054177cc37c41dbef7",
+      "src/crush/hash.c": "65167638f2da5af1b27ff78d1e2b148bf22ff435144c4d8f583db6728fb8a20d",
+      "src/crush/crush_ln_table.h": "9d0cdacacbb4a21da36f134368e41e835fca1d5d6058e6abebb85775339e1b1a"
+    },
+    "references": [{"type":"ceph-source","locator":"https://github.com/ceph/ceph.git","revision":"7f793731f1b39eb4f465e960113d2363c311b964","role":"Erasure-code CHOOSE_INDEP mapping oracle"}]
+  },
+  "generator": {
+    "tool": "crushtool",
+    "version": "ceph version 20.2.4",
+    "command": ["crushtool -i testdata/p10/crushmap.bin --test --show-mappings --rule 2 --num-rep 3 --min-x 0 --max-x 255 > testdata/p10/mappings.txt"],
+    "image": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"
+  },
+  "secrets": {"contains_secrets":false,"synthetic_only":true},
+  "license": {"upstream_expression":"LGPL-2.1-or-later","redistribution":"pending","reviewed_by":"pending"}
+}

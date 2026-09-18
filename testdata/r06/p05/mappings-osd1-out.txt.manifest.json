@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "fixture": "mappings-osd1-out.txt",
+  "sha256": "2e77d33e59b2132df9c23320e2b76faf186b5164c10ca2f467e78cad08f5e494",
+  "kind": "native-oracle",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/crush/mapper.c", "src/crush/hash.c", "src/crush/crush_ln_table.h"],
+    "files": {"src/crush/mapper.c":"d320fffa1a4b4b1c2d25b1c966f928b3d5ba2636889261054177cc37c41dbef7","src/crush/hash.c":"65167638f2da5af1b27ff78d1e2b148bf22ff435144c4d8f583db6728fb8a20d","src/crush/crush_ln_table.h":"9d0cdacacbb4a21da36f134368e41e835fca1d5d6058e6abebb85775339e1b1a"},
+    "references": [{"type":"ceph-source","locator":"https://github.com/ceph/ceph.git","revision":"7f793731f1b39eb4f465e960113d2363c311b964","role":"OSD-out CRUSH transition oracle"}]
+  },
+  "generator": {"tool":"crushtool","version":"ceph version 20.2.4","command":["./integration/p05/reproduce.sh"],"image":"quay.io/ceph/ceph@sha256:09ee90f6f3e0c7b9954f71d214ee05e9bbaaaea3716b1dd619603283b829f8b8"},
+  "secrets": {"contains_secrets":false,"synthetic_only":true},
+  "license": {"upstream_expression":"LGPL-2.1-or-later","redistribution":"pending","reviewed_by":"pending"}
+}

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -73,6 +73,7 @@ name = "rados"
 [features]
 r04-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
 r05-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
+r06-integration = []
 
 [[bin]]
 name = "rados-r04-live"
@@ -100,6 +101,7 @@ tokio = { version = "=1.47.1", default-features = false, features = ["io-util", 
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "rt", "sync", "test-util"] }
 
 [lints]

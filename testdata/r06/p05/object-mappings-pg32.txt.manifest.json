@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "fixture": "object-mappings-pg32.txt",
+  "sha256": "3008174c429e43fbc108027691ba77a1f371cf48b384df7a0cb62757af48bbe2",
+  "kind": "native-oracle",
+  "source": {
+    "repository": "https://github.com/ceph/ceph.git",
+    "commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "paths": ["src/osd/OSDMap.cc", "src/osd/osd_types.cc", "src/crush/mapper.c"],
+    "files": {"src/osd/OSDMap.cc":"36b74d8c998da9c93b7b0c9ba3ecac5d3e9df26bfb99c2f22095b37da44e0dc8","src/osd/osd_types.cc":"614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b","src/crush/mapper.c":"d320fffa1a4b4b1c2d25b1c966f928b3d5ba2636889261054177cc37c41dbef7"},
+    "references": [{"type":"ceph-source","locator":"https://github.com/ceph/ceph.git","revision":"7f793731f1b39eb4f465e960113d2363c311b964","role":"Complete object routing after 256-to-32 PG transition"}]
+  },
+  "generator": {"tool":"osdmaptool","version":"ceph version 20.2.4","command":["./integration/p05/reproduce.sh"],"image":"quay.io/ceph/ceph@sha256:09ee90f6f3e0c7b9954f71d214ee05e9bbaaaea3716b1dd619603283b829f8b8"},
+  "secrets": {"contains_secrets":false,"synthetic_only":true},
+  "license": {"upstream_expression":"LGPL-2.1-or-later","redistribution":"pending","reviewed_by":"pending"}
+}

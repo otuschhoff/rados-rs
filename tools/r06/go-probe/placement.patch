@@ -1,0 +1,99 @@
+diff --git a/internal/maps/placement.go b/internal/maps/placement.go
+index eef2a2b..30de51b 100644
+--- a/internal/maps/placement.go
++++ b/internal/maps/placement.go
+@@ -98,11 +98,12 @@ func (osdMap *OSDMap) placeMapped(poolID int64, placement ObjectPlacement) (Obje
+ 	if err := osdMap.validateUpmap(placement.PG); err != nil {
+ 		return ObjectPlacement{}, err
+ 	}
++	sharded := pool.poolType == poolTypeErasure
+ 	mapped := osdMap.applyUpmap(placement.PG, raw)
+-	up := osdMap.onlyUp(mapped)
++	up := osdMap.onlyUp(mapped, sharded)
+ 	upPrimary := firstOSD(up)
+-	osdMap.applyPrimaryAffinity(placement.PlacementSeed, up, &upPrimary)
+-	acting, actingPrimary, err := osdMap.tempMapping(placement.PG)
++	osdMap.applyPrimaryAffinity(placement.PlacementSeed, up, &upPrimary, !sharded)
++	acting, actingPrimary, err := osdMap.tempMapping(placement.PG, sharded)
+ 	if err != nil {
+ 		return ObjectPlacement{}, err
+ 	}
+@@ -179,7 +180,7 @@ func (osdMap *OSDMap) applyUpmap(pg PG, source []int32) []int32 {
+ 
+ func (osdMap *OSDMap) validateUpmap(pg PG) error {
+ 	if replacement, ok := osdMap.pgUpmap[pg]; ok {
+-		if err := osdMap.validatePlacementSet("pg_upmap", replacement); err != nil {
++		if err := osdMap.validatePlacementSet("pg_upmap", replacement, false); err != nil {
+ 			return err
+ 		}
+ 	}
+@@ -191,17 +192,19 @@ func (osdMap *OSDMap) validateUpmap(pg PG) error {
+ 	return nil
+ }
+ 
+-func (osdMap *OSDMap) onlyUp(source []int32) []int32 {
++func (osdMap *OSDMap) onlyUp(source []int32, preserveSlots bool) []int32 {
+ 	result := make([]int32, 0, len(source))
+ 	for _, osd := range source {
+ 		if osdMap.isUp(osd) {
+ 			result = append(result, osd)
++		} else if preserveSlots {
++			result = append(result, crushItemNone)
+ 		}
+ 	}
+ 	return result
+ }
+ 
+-func (osdMap *OSDMap) tempMapping(pg PG) ([]int32, int32, error) {
++func (osdMap *OSDMap) tempMapping(pg PG, preserveSlots bool) ([]int32, int32, error) {
+ 	primary := int32(-1)
+ 	if override, ok := osdMap.primaryTemp[pg]; ok {
+ 		primary = override
+@@ -210,17 +213,17 @@ func (osdMap *OSDMap) tempMapping(pg PG) ([]int32, int32, error) {
+ 	if !ok {
+ 		return nil, primary, nil
+ 	}
+-	if err := osdMap.validatePlacementSet("pg_temp", source); err != nil {
++	if err := osdMap.validatePlacementSet("pg_temp", source, preserveSlots); err != nil {
+ 		return nil, -1, err
+ 	}
+-	result := osdMap.onlyUp(source)
++	result := osdMap.onlyUp(source, preserveSlots)
+ 	if primary == -1 {
+ 		primary = firstOSD(result)
+ 	}
+ 	return result, primary, nil
+ }
+ 
+-func (osdMap *OSDMap) applyPrimaryAffinity(seed uint32, osds []int32, primary *int32) {
++func (osdMap *OSDMap) applyPrimaryAffinity(seed uint32, osds []int32, primary *int32, shiftPrimary bool) {
+ 	if len(osdMap.primaryAffinity) == 0 {
+ 		return
+ 	}
+@@ -243,7 +246,7 @@ func (osdMap *OSDMap) applyPrimaryAffinity(seed uint32, osds []int32, primary *i
+ 		return
+ 	}
+ 	*primary = osds[position]
+-	if position > 0 {
++	if shiftPrimary && position > 0 {
+ 		copy(osds[1:position+1], osds[:position])
+ 		osds[0] = *primary
+ 	}
+@@ -257,7 +260,7 @@ func (osdMap *OSDMap) isUp(osd int32) bool {
+ 	return osdMap.exists(osd) && osdMap.osdState[osd]&(1<<1) != 0
+ }
+ 
+-func (osdMap *OSDMap) validatePlacementSet(name string, osds []int32) error {
++func (osdMap *OSDMap) validatePlacementSet(name string, osds []int32, allowDuplicates bool) error {
+ 	seen := make(map[int32]struct{}, len(osds))
+ 	for _, osd := range osds {
+ 		if osd == crushItemNone {
+@@ -266,7 +269,7 @@ func (osdMap *OSDMap) validatePlacementSet(name string, osds []int32) error {
+ 		if !osdMap.exists(osd) {
+ 			return fmt.Errorf("%w: %s references nonexistent osd.%d", ErrUnsupportedPlacement, name, osd)
+ 		}
+-		if _, duplicate := seen[osd]; duplicate {
++		if _, duplicate := seen[osd]; duplicate && !allowDuplicates {
+ 			return fmt.Errorf("%w: %s contains duplicate osd.%d", ErrUnsupportedPlacement, name, osd)
+ 		}
+ 		seen[osd] = struct{}{}

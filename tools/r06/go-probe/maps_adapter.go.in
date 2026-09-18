@@ -1,0 +1,31 @@
+package maps
+
+func R06ObjectMap(crushData []byte, pgCount uint32, weights []uint32, remaps map[PG][]OSDRemap) *OSDMap {
+	return &OSDMap{
+		fsid: FSID{1}, epoch: 1,
+		pools: map[int64]Pool{1: {
+			id: 1, name: "p05", poolType: poolTypeReplicated, size: 3,
+			crushRule: 0, objectHash: objectHashRJenkins, pgCount: pgCount,
+			placementPGCount: pgCount, flags: poolFlagHashPSPool,
+		}},
+		nameToID: map[string]int64{"p05": 1},
+		maxOSD: int32(len(weights)), osdState: []uint32{3, 3, 3, 3},
+		osdWeight: append([]uint32(nil), weights...), crushData: append([]byte(nil), crushData...),
+		pgUpmapItems: remaps,
+	}
+}
+
+func R06ErasureMap(crushData []byte, weights, primaryAffinity []uint32, pgTemp map[PG][]int32, primaryTemp map[PG]int32) *OSDMap {
+	return &OSDMap{
+		fsid: FSID{1}, epoch: 1,
+		pools: map[int64]Pool{3: {
+			id: 3, name: "p10-ec", poolType: poolTypeErasure, size: 3,
+			crushRule: 2, objectHash: objectHashRJenkins, pgCount: 16,
+			placementPGCount: 16, flags: poolFlagHashPSPool,
+		}},
+		nameToID: map[string]int64{"p10-ec": 3},
+		maxOSD: 3, osdState: []uint32{3, 3, 3},
+		osdWeight: append([]uint32(nil), weights...), crushData: append([]byte(nil), crushData...),
+		primaryAffinity: append([]uint32(nil), primaryAffinity...), pgTemp: pgTemp, primaryTemp: primaryTemp,
+	}
+}

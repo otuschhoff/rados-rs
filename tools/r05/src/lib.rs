@@ -12,6 +12,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 #[allow(dead_code, unused_imports)]
+#[path = "../../../src/crush/mod.rs"]
+mod crush;
+#[allow(dead_code, unused_imports)]
 #[path = "../../../src/maps/mod.rs"]
 mod maps;
 #[allow(dead_code)]
