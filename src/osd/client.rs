@@ -16,7 +16,7 @@ use crate::msgr::session::{Config as SessionConfig, Machine, ReconnectPolicy, Se
 use crate::msgr::supervisor::{Connector, Session};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use super::backoff::{
@@ -24,8 +24,8 @@ use super::backoff::{
     encode_acknowledgment,
 };
 use super::messages::{
-    FLAG_IGNORE_CACHE, FLAG_IGNORE_OVERLAY, FLAG_REDIRECTED, FLAG_RETRY, Limits, Operation, Reply,
-    Request, decode_reply, encode_request,
+    FLAG_IGNORE_CACHE, FLAG_IGNORE_OVERLAY, FLAG_ON_DISK, FLAG_REDIRECTED, FLAG_RETRY, Limits,
+    Operation, Reply, Request, decode_reply, encode_request,
 };
 
 const ENTITY_OSD: u8 = 4;
@@ -34,6 +34,8 @@ const MAX_RETIRED_SESSIONS: usize = 16;
 const CANCELLATION_POLL: Duration = Duration::from_millis(10);
 const TRANSIENT_REFRESH_WAIT: Duration = Duration::from_millis(250);
 const READ_REPLY_FRONT_BYTES: u64 = 144;
+const MAX_MUTATIONS: usize = 64;
+const MAX_MUTATION_BYTES: u64 = 64 * 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Target {
@@ -50,6 +52,50 @@ pub(crate) struct ReadResult {
     pub(crate) version: u64,
 }
 
+pub(crate) type MutationResult = ReadResult;
+
+pub(crate) enum Mutation<'a> {
+    Create { exclusive: bool },
+    Write { offset: u64, data: &'a [u8] },
+    WriteFull(&'a [u8]),
+    Append(&'a [u8]),
+    Truncate { size: u64 },
+    Zero { offset: u64, length: u64 },
+    Remove,
+}
+
+impl Mutation<'_> {
+    fn retained_bytes(&self) -> Result<u64, Error> {
+        let data = match self {
+            Self::Write { data, .. } | Self::WriteFull(data) | Self::Append(data) => *data,
+            Self::Create { .. } | Self::Truncate { .. } | Self::Zero { .. } | Self::Remove => &[],
+        };
+        u64::try_from(data.len()).map_err(|_| Error::LimitExceeded)
+    }
+
+    fn into_owned(self) -> Operation {
+        match self {
+            Self::Create { exclusive } => Operation::Create { exclusive },
+            Self::Write { offset, data } => Operation::Write {
+                offset,
+                data: data.to_vec(),
+            },
+            Self::WriteFull(data) => Operation::WriteFull(data.to_vec()),
+            Self::Append(data) => Operation::Append(data.to_vec()),
+            Self::Truncate { size } => Operation::Truncate { size },
+            Self::Zero { offset, length } => Operation::Zero { offset, length },
+            Self::Remove => Operation::Remove,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum UnknownCause {
+    Cancelled,
+    Timeout,
+    Transport,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Error {
     Closed,
@@ -62,7 +108,27 @@ pub(crate) enum Error {
     Cancelled,
     QueueSaturated,
     RecoveryExhausted,
+    OutcomeUnknown(UnknownCause),
     WireErrno(i32),
+}
+
+#[derive(Default)]
+struct MutationState {
+    admission_closed: bool,
+    next_sequence: u64,
+    pending: HashMap<u64, u64>,
+    retained_bytes: u64,
+    earliest_unknown: Option<u64>,
+}
+
+struct MutationCompletion {
+    client: Arc<Client>,
+    sequence: Option<u64>,
+}
+
+enum AdmissionOutcome {
+    Request(crate::msgr::supervisor::Request),
+    Reply(Message),
 }
 
 struct SessionEntry {
@@ -90,6 +156,8 @@ pub(crate) struct Client {
     sessions: Mutex<HashMap<i32, SessionEntry>>,
     retired: Mutex<Vec<Arc<OSDSession>>>,
     next_transaction: AtomicU64,
+    mutations: Mutex<MutationState>,
+    mutation_changed: watch::Sender<u64>,
     incarnation: AtomicI32,
     closed: AtomicBool,
     frame_limits: FrameLimits,
@@ -107,11 +175,14 @@ impl Client {
         handshake_timeout: Duration,
         allow_crc: bool,
     ) -> Self {
+        let (mutation_changed, _) = watch::channel(0);
         Self {
             authority,
             sessions: Mutex::new(HashMap::new()),
             retired: Mutex::new(Vec::new()),
             next_transaction: AtomicU64::new(1),
+            mutations: Mutex::new(MutationState::default()),
+            mutation_changed,
             incarnation: AtomicI32::new(0),
             closed: AtomicBool::new(false),
             frame_limits,
@@ -156,32 +227,213 @@ impl Client {
             .await
     }
 
+    pub(crate) async fn mutate(
+        self: &Arc<Self>,
+        monitor: Arc<MonitorClient>,
+        target: Target,
+        mutation: Mutation<'_>,
+        options: OperationOptions,
+    ) -> Result<MutationResult, Error> {
+        if target.snapshot != super::messages::NO_SNAP {
+            return Err(Error::LimitExceeded);
+        }
+        let retained = mutation.retained_bytes()?;
+        if retained > u64::from(self.message_limits.max_bytes) {
+            return Err(Error::LimitExceeded);
+        }
+        let (sequence, transaction_id) = self.admit_mutation(retained, &options).await?;
+        let operation = mutation.into_owned();
+        let (result_tx, result_rx) = oneshot::channel();
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut completion = MutationCompletion {
+                client: Arc::clone(&client),
+                sequence: Some(sequence),
+            };
+            let result = client
+                .execute_mutation(&monitor, target, operation, transaction_id, &options)
+                .await;
+            completion.finish(result.as_ref().err());
+            let _ = result_tx.send(result);
+        });
+        result_rx
+            .await
+            .unwrap_or(Err(Error::OutcomeUnknown(UnknownCause::Transport)))
+    }
+
+    async fn admit_mutation(
+        &self,
+        retained: u64,
+        options: &OperationOptions,
+    ) -> Result<(u64, u64), Error> {
+        if retained > MAX_MUTATION_BYTES {
+            return Err(Error::LimitExceeded);
+        }
+        loop {
+            check_options(options)?;
+            let (admission, mut changed) = {
+                let mut state = self
+                    .mutations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if self.closed.load(Ordering::Acquire) {
+                    return Err(Error::Closed);
+                }
+                (
+                    admit_mutation_state(&mut state, retained)?,
+                    self.mutation_changed.subscribe(),
+                )
+            };
+            if let Some(sequence) = admission {
+                let transaction_id = match self.take_transaction_id() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.complete_mutation(sequence, Some(&error));
+                        return Err(error);
+                    }
+                };
+                return Ok((sequence, transaction_id));
+            }
+            wait_for_change(&mut changed, options).await?;
+        }
+    }
+
+    fn complete_mutation(&self, sequence: u64, error: Option<&Error>) {
+        let mut state = self
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if complete_mutation_state(&mut state, sequence, error) {
+            let revision = self.mutation_changed.borrow().wrapping_add(1);
+            self.mutation_changed.send_replace(revision);
+        }
+    }
+
+    pub(crate) async fn flush(&self, options: &OperationOptions) -> Result<(), Error> {
+        let watermark = self
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_sequence;
+        loop {
+            let (waiting, unknown, mut changed) = {
+                let state = self
+                    .mutations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (
+                    state.pending.keys().any(|sequence| *sequence <= watermark),
+                    state
+                        .earliest_unknown
+                        .is_some_and(|sequence| sequence <= watermark),
+                    self.mutation_changed.subscribe(),
+                )
+            };
+            if !waiting {
+                return if unknown {
+                    Err(Error::OutcomeUnknown(UnknownCause::Transport))
+                } else {
+                    Ok(())
+                };
+            }
+            if let Err(error) = wait_for_change(&mut changed, options).await {
+                let state = self
+                    .mutations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let unknown = unknown
+                    || state
+                        .earliest_unknown
+                        .is_some_and(|sequence| sequence <= watermark);
+                return if unknown {
+                    Err(Error::OutcomeUnknown(match error {
+                        Error::Cancelled => UnknownCause::Cancelled,
+                        Error::Timeout => UnknownCause::Timeout,
+                        _ => UnknownCause::Transport,
+                    }))
+                } else {
+                    Err(error)
+                };
+            }
+        }
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        let mut state = self
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        close_mutation_admission_state(&mut state);
+        let revision = self.mutation_changed.borrow().wrapping_add(1);
+        self.mutation_changed.send_replace(revision);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn mutation_admission_is_closed(&self) -> bool {
+        self.mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admission_closed
+    }
+
+    fn take_transaction_id(&self) -> Result<u64, Error> {
+        self.next_transaction
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| Error::LimitExceeded)
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn execute(
         &self,
         monitor: &MonitorClient,
-        mut target: Target,
+        target: Target,
         operation: Operation,
         options: &OperationOptions,
     ) -> Result<ReadResult, Error> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::Closed);
         }
-        let transaction_id = self
-            .next_transaction
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                value.checked_add(1)
-            })
-            .map_err(|_| Error::LimitExceeded)?;
+        let transaction_id = self.take_transaction_id()?;
+        self.execute_routed(monitor, target, operation, transaction_id, false, options)
+            .await
+    }
+
+    async fn execute_mutation(
+        &self,
+        monitor: &MonitorClient,
+        target: Target,
+        operation: Operation,
+        transaction_id: u64,
+        options: &OperationOptions,
+    ) -> Result<MutationResult, Error> {
+        self.execute_routed(monitor, target, operation, transaction_id, true, options)
+            .await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn execute_routed(
+        &self,
+        monitor: &MonitorClient,
+        mut target: Target,
+        operation: Operation,
+        mut transaction_id: u64,
+        mutation: bool,
+        options: &OperationOptions,
+    ) -> Result<ReadResult, Error> {
         let client_incarnation = self.client_incarnation()?;
         let mut flags = 0;
+        let mut prior_unknown = None;
         for attempt in 0..MAX_ATTEMPTS {
             if self.closed.load(Ordering::Acquire) {
-                return Err(Error::Closed);
+                return Err(preserve_unknown(Error::Closed, prior_unknown));
             }
-            check_options(options)?;
+            check_options(options).map_err(|error| preserve_unknown(error, prior_unknown))?;
             let state = monitor.snapshot();
-            let map = state.osdmap().ok_or(Error::NotConnected)?;
+            let map = state
+                .osdmap()
+                .ok_or_else(|| preserve_unknown(Error::NotConnected, prior_unknown))?;
             let placement = map
                 .place_object(
                     target.pool_id,
@@ -189,13 +441,13 @@ impl Client {
                     &target.locator,
                     &target.namespace,
                 )
-                .map_err(|_| Error::NoPrimary)?;
+                .map_err(|_| preserve_unknown(Error::NoPrimary, prior_unknown))?;
             if placement.acting_primary < 0 {
-                return Err(Error::NoPrimary);
+                return Err(preserve_unknown(Error::NoPrimary, prior_unknown));
             }
             let addresses = map
                 .osd_client_addresses(placement.acting_primary)
-                .ok_or(Error::NoPrimary)?;
+                .ok_or_else(|| preserve_unknown(Error::NoPrimary, prior_unknown))?;
             if attempt > 0 {
                 flags |= FLAG_RETRY;
             }
@@ -206,7 +458,7 @@ impl Client {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
                 .map_or(0, |authority| authority.metadata().global_id);
-            let operations = [operation];
+            let operations = std::slice::from_ref(&operation);
             let message = encode_request(
                 &Request {
                     map_epoch: map.epoch(),
@@ -225,7 +477,7 @@ impl Client {
                     retry: i32::try_from(attempt).map_err(|_| Error::LimitExceeded)?,
                     flags,
                     features: GlobalFeatures::OSD_CLIENT.0,
-                    operations: &operations,
+                    operations,
                 },
                 self.message_limits,
             )
@@ -239,32 +491,68 @@ impl Client {
                 namespace: target.namespace.clone(),
                 pool: target.pool_id,
             };
+            let attempt_deadline = std::time::Instant::now()
+                .checked_add(self.dial_timeout.saturating_add(self.handshake_timeout))
+                .ok_or(Error::LimitExceeded)?;
+            let attempt_options = options.clone().with_deadline(
+                options
+                    .deadline()
+                    .map_or(attempt_deadline, |deadline| deadline.min(attempt_deadline)),
+            );
             let reply_message = match session
-                .submit(placement.pg, &object, message, options)
+                .submit(placement.pg, &object, message, mutation, &attempt_options)
                 .await
             {
                 Ok(reply) => reply,
-                Err(Error::QueueSaturated) => return Err(Error::QueueSaturated),
+                Err(Error::QueueSaturated) => {
+                    return Err(preserve_unknown(Error::QueueSaturated, prior_unknown));
+                }
                 Err(error) => {
                     self.invalidate(placement.acting_primary, &session);
                     if self.closed.load(Ordering::Acquire) {
-                        return Err(Error::Closed);
+                        return Err(preserve_unknown(Error::Closed, prior_unknown));
+                    }
+                    if let Error::OutcomeUnknown(cause) = error {
+                        prior_unknown = Some(prior_unknown.unwrap_or(cause));
+                        if wait_for_primary_change(
+                            monitor,
+                            &target,
+                            placement.acting_primary,
+                            map.epoch(),
+                            options,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        return Err(Error::OutcomeUnknown(prior_unknown.unwrap_or(cause)));
                     }
                     if matches!(error, Error::Timeout | Error::Cancelled) {
-                        return Err(error);
+                        return Err(preserve_unknown(error, prior_unknown));
                     }
-                    best_effort_refresh_map(monitor, map.epoch(), options).await?;
+                    best_effort_refresh_map(monitor, map.epoch(), options)
+                        .await
+                        .map_err(|error| preserve_unknown(error, prior_unknown))?;
                     continue;
                 }
             };
             let Ok(reply) = decode_reply(&reply_message, self.message_limits) else {
                 self.invalidate(placement.acting_primary, &session);
-                return Err(Error::MalformedReply);
+                return Err(if mutation {
+                    Error::OutcomeUnknown(UnknownCause::Transport)
+                } else {
+                    Error::MalformedReply
+                });
             };
             if validate_target(&reply, &target.object, placement.pg, attempt).is_err() {
                 self.invalidate(placement.acting_primary, &session);
-                return Err(Error::MalformedReply);
+                return Err(if mutation {
+                    Error::OutcomeUnknown(UnknownCause::Transport)
+                } else {
+                    Error::MalformedReply
+                });
             }
+            prior_unknown = None;
             if let Some(redirect) = reply.redirect {
                 target.pool_id = redirect.pool;
                 if !redirect.object.is_empty() {
@@ -273,20 +561,37 @@ impl Client {
                 target.locator = redirect.locator;
                 target.namespace = redirect.namespace;
                 flags |= FLAG_REDIRECTED | FLAG_IGNORE_CACHE | FLAG_IGNORE_OVERLAY;
+                if mutation {
+                    transaction_id = self.take_transaction_id()?;
+                }
                 continue;
             }
             if reply.result == -11 {
                 refresh_map(monitor, map.epoch(), options).await?;
+                if mutation {
+                    transaction_id = self.take_transaction_id()?;
+                }
                 continue;
             }
-            if validate_operation(&reply, operation).is_err() {
+            if validate_operation(&reply, &operation).is_err() {
                 self.invalidate(placement.acting_primary, &session);
-                return Err(Error::MalformedReply);
+                return Err(if mutation {
+                    Error::OutcomeUnknown(UnknownCause::Transport)
+                } else {
+                    Error::MalformedReply
+                });
             }
             let operation_reply = &reply.operations[0];
             if operation_reply.code == -11 {
                 refresh_map(monitor, map.epoch(), options).await?;
+                if mutation {
+                    transaction_id = self.take_transaction_id()?;
+                }
                 continue;
+            }
+            if mutation && validate_durable_reply(&reply).is_err() {
+                self.invalidate(placement.acting_primary, &session);
+                return Err(Error::OutcomeUnknown(UnknownCause::Transport));
             }
             if reply.result < 0 {
                 return Err(Error::WireErrno(reply.result));
@@ -299,7 +604,7 @@ impl Client {
                 version: reply.version,
             });
         }
-        Err(Error::RecoveryExhausted)
+        Err(preserve_unknown(Error::RecoveryExhausted, prior_unknown))
     }
 
     fn session(&self, osd: i32, addresses: &EntityAddrVec) -> Result<Arc<OSDSession>, Error> {
@@ -461,6 +766,7 @@ impl Client {
     }
 
     pub(crate) fn close(&self) {
+        self.begin_shutdown();
         self.closed.store(true, Ordering::Release);
         let sessions = self
             .sessions
@@ -560,6 +866,7 @@ impl OSDSession {
         pg: PG,
         object: &HObject,
         message: Message,
+        mutation: bool,
         options: &OperationOptions,
     ) -> Result<Message, Error> {
         loop {
@@ -577,12 +884,16 @@ impl OSDSession {
                 wait_for_change(&mut changed, options).await?;
                 continue;
             }
-            let mut request = wait_for(self.raw.admit(message, false), options).await?;
+            let admission = admit_with_cancellation(&self.raw, message, options, mutation).await?;
+            let AdmissionOutcome::Request(mut request) = admission else {
+                let AdmissionOutcome::Reply(reply) = admission else {
+                    unreachable!()
+                };
+                return Ok(reply);
+            };
             request.cancel_on_drop();
             drop(state);
-            return wait_for(request.result(), options)
-                .await?
-                .ok_or(Error::MalformedReply);
+            return wait_for_request(&mut request, options, mutation).await;
         }
     }
 
@@ -615,6 +926,20 @@ impl Drop for OSDSession {
 impl Drop for Client {
     fn drop(&mut self) {
         self.close();
+    }
+}
+
+impl MutationCompletion {
+    fn finish(&mut self, error: Option<&Error>) {
+        if let Some(sequence) = self.sequence.take() {
+            self.client.complete_mutation(sequence, error);
+        }
+    }
+}
+
+impl Drop for MutationCompletion {
+    fn drop(&mut self) {
+        self.finish(Some(&Error::OutcomeUnknown(UnknownCause::Transport)));
     }
 }
 
@@ -696,6 +1021,104 @@ async fn wait_for_change(
     .await
 }
 
+async fn admit_with_cancellation(
+    raw: &Session,
+    message: Message,
+    options: &OperationOptions,
+    mutation: bool,
+) -> Result<AdmissionOutcome, Error> {
+    check_options(options)?;
+    let deadline = options.deadline().ok_or(Error::Timeout)?;
+    let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+    let cancellation = tokio::time::sleep(CANCELLATION_POLL);
+    let admission = raw.admit(message, false);
+    tokio::pin!(admission, timeout, cancellation);
+    loop {
+        let cause = tokio::select! {
+            result = &mut admission => {
+                return result.map(AdmissionOutcome::Request).map_err(map_session_error);
+            }
+            () = &mut timeout => Some(UnknownCause::Timeout),
+            () = &mut cancellation => {
+                if options.is_canceled() {
+                    Some(UnknownCause::Cancelled)
+                } else {
+                    cancellation.as_mut().reset(tokio::time::Instant::now() + CANCELLATION_POLL);
+                    None
+                }
+            }
+        };
+        let Some(cause) = cause else { continue };
+        return match admission.await {
+            Ok(mut request) => classify_cancel(request.cancel().await, cause, mutation)
+                .map(AdmissionOutcome::Reply),
+            Err(SessionError::Cancelled) => Err(match cause {
+                UnknownCause::Cancelled => Error::Cancelled,
+                UnknownCause::Timeout => Error::Timeout,
+                UnknownCause::Transport => Error::NotConnected,
+            }),
+            Err(error) => Err(map_session_error(error)),
+        };
+    }
+}
+
+async fn wait_for_request(
+    request: &mut crate::msgr::supervisor::Request,
+    options: &OperationOptions,
+    mutation: bool,
+) -> Result<Message, Error> {
+    let deadline = options.deadline().ok_or(Error::Timeout)?;
+    let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
+    let cancellation = tokio::time::sleep(CANCELLATION_POLL);
+    tokio::pin!(timeout, cancellation);
+    loop {
+        let cause = tokio::select! {
+            result = request.wait_result() => {
+                return result
+                    .map_err(|error| map_request_error(error, mutation))?
+                    .ok_or(Error::MalformedReply);
+            }
+            () = &mut timeout => Some(UnknownCause::Timeout),
+            () = &mut cancellation => {
+                if options.is_canceled() {
+                    Some(UnknownCause::Cancelled)
+                } else {
+                    cancellation.as_mut().reset(tokio::time::Instant::now() + CANCELLATION_POLL);
+                    None
+                }
+            }
+        };
+        let Some(cause) = cause else { continue };
+        return classify_cancel(request.cancel().await, cause, mutation);
+    }
+}
+
+fn classify_cancel(
+    result: Result<Option<Message>, SessionError>,
+    cause: UnknownCause,
+    mutation: bool,
+) -> Result<Message, Error> {
+    match result {
+        Ok(Some(reply)) => Ok(reply),
+        Ok(None) => Err(Error::MalformedReply),
+        Err(SessionError::Cancelled) => Err(match cause {
+            UnknownCause::Cancelled => Error::Cancelled,
+            UnknownCause::Timeout => Error::Timeout,
+            UnknownCause::Transport => Error::NotConnected,
+        }),
+        Err(SessionError::OutcomeUnknown) if mutation => Err(Error::OutcomeUnknown(cause)),
+        Err(error) => Err(map_request_error(error, mutation)),
+    }
+}
+
+const fn map_request_error(error: SessionError, mutation: bool) -> Error {
+    if mutation && matches!(error, SessionError::OutcomeUnknown) {
+        Error::OutcomeUnknown(UnknownCause::Transport)
+    } else {
+        map_session_error(error)
+    }
+}
+
 async fn refresh_map(
     monitor: &MonitorClient,
     epoch: u32,
@@ -742,6 +1165,44 @@ async fn best_effort_refresh_map(
     }
 }
 
+async fn wait_for_primary_change(
+    monitor: &MonitorClient,
+    target: &Target,
+    previous_primary: i32,
+    mut epoch: u32,
+    options: &OperationOptions,
+) -> bool {
+    for _ in 0..MAX_ATTEMPTS {
+        if check_options(options).is_err() {
+            return false;
+        }
+        let snapshot = monitor.snapshot();
+        let Some(map) = snapshot.osdmap() else {
+            return false;
+        };
+        if let Ok(placement) = map.place_object(
+            target.pool_id,
+            &target.object,
+            &target.locator,
+            &target.namespace,
+        ) && placement.acting_primary != previous_primary
+        {
+            return placement.acting_primary >= 0;
+        }
+        epoch = epoch.max(map.epoch());
+        let refresh_deadline = std::time::Instant::now()
+            .checked_add(TRANSIENT_REFRESH_WAIT)
+            .unwrap_or_else(|| options.deadline().unwrap_or_else(std::time::Instant::now));
+        let bounded = options.clone().with_deadline(
+            options
+                .deadline()
+                .map_or(refresh_deadline, |deadline| deadline.min(refresh_deadline)),
+        );
+        let _ = refresh_map(monitor, epoch, &bounded).await;
+    }
+    false
+}
+
 fn validate_target(reply: &Reply, object: &[u8], pg: PG, attempt: usize) -> Result<(), Error> {
     if reply.object != object
         || reply.pg != pg
@@ -753,16 +1214,112 @@ fn validate_target(reply: &Reply, object: &[u8], pg: PG, attempt: usize) -> Resu
     Ok(())
 }
 
-fn validate_operation(reply: &Reply, operation: Operation) -> Result<(), Error> {
+fn validate_operation(reply: &Reply, operation: &Operation) -> Result<(), Error> {
     if reply.operations.len() != 1 || reply.operations[0].operation != operation.code() {
         return Err(Error::MalformedReply);
     }
     if let Operation::Read { length, .. } = operation
-        && reply.operations[0].data.len() as u64 > length
+        && reply.operations[0].data.len() as u64 > *length
     {
         return Err(Error::MalformedReply);
     }
     Ok(())
+}
+
+fn validate_durable_reply(reply: &Reply) -> Result<(), Error> {
+    if reply.result == 0 && reply.flags & i64::from(FLAG_ON_DISK) == 0 {
+        return Err(Error::OutcomeUnknown(UnknownCause::Transport));
+    }
+    Ok(())
+}
+
+const fn preserve_unknown(error: Error, prior: Option<UnknownCause>) -> Error {
+    match prior {
+        Some(cause) => Error::OutcomeUnknown(cause),
+        None => error,
+    }
+}
+
+fn complete_mutation_state(
+    state: &mut MutationState,
+    sequence: u64,
+    error: Option<&Error>,
+) -> bool {
+    let Some(retained) = state.pending.remove(&sequence) else {
+        return false;
+    };
+    state.retained_bytes -= retained;
+    if matches!(error, Some(Error::OutcomeUnknown(_)))
+        && state
+            .earliest_unknown
+            .is_none_or(|unknown| sequence < unknown)
+    {
+        state.earliest_unknown = Some(sequence);
+    }
+    true
+}
+
+fn admit_mutation_state(state: &mut MutationState, retained: u64) -> Result<Option<u64>, Error> {
+    if state.admission_closed {
+        return Err(Error::Closed);
+    }
+    if state.pending.len() >= MAX_MUTATIONS
+        || retained > MAX_MUTATION_BYTES.saturating_sub(state.retained_bytes)
+    {
+        return Ok(None);
+    }
+    state.next_sequence = state
+        .next_sequence
+        .checked_add(1)
+        .ok_or(Error::LimitExceeded)?;
+    let sequence = state.next_sequence;
+    state.pending.insert(sequence, retained);
+    state.retained_bytes += retained;
+    Ok(Some(sequence))
+}
+
+const fn close_mutation_admission_state(state: &mut MutationState) {
+    state.admission_closed = true;
+}
+
+#[cfg(feature = "r08-integration")]
+pub(crate) fn fuzz_mutation_lifecycle(script: &[u8]) {
+    let mut state = MutationState::default();
+    for (index, command) in script.iter().copied().take(MAX_MUTATIONS * 4).enumerate() {
+        match command % 4 {
+            0 if state.pending.len() < MAX_MUTATIONS => {
+                let Some(sequence) = state.next_sequence.checked_add(1) else {
+                    break;
+                };
+                let retained = u64::from(command);
+                state.next_sequence = sequence;
+                state.pending.insert(sequence, retained);
+                state.retained_bytes += retained;
+            }
+            1 | 2 if !state.pending.is_empty() => {
+                let offset = index % state.pending.len();
+                let sequence = *state.pending.keys().nth(offset).expect("bounded index");
+                let error =
+                    (command % 4 == 2).then_some(Error::OutcomeUnknown(UnknownCause::Transport));
+                assert!(complete_mutation_state(
+                    &mut state,
+                    sequence,
+                    error.as_ref()
+                ));
+            }
+            3 => state.admission_closed = true,
+            _ => {}
+        }
+        assert_eq!(
+            state.retained_bytes,
+            state.pending.values().copied().sum::<u64>()
+        );
+        assert!(
+            state
+                .earliest_unknown
+                .is_none_or(|unknown| unknown <= state.next_sequence)
+        );
+    }
 }
 
 fn random_nonzero() -> Result<u64, Error> {
@@ -807,7 +1364,7 @@ async fn wait_for<T>(
     }
 }
 
-fn map_session_error(error: SessionError) -> Error {
+const fn map_session_error(error: SessionError) -> Error {
     match error {
         SessionError::Closed => Error::Closed,
         SessionError::Cancelled => Error::Cancelled,
@@ -953,6 +1510,7 @@ mod tests {
         let mut reply = Reply {
             object: b"blocked".to_vec(),
             pg,
+            flags: 0,
             result: -11,
             map_epoch: 1,
             retry: 0,
@@ -962,7 +1520,7 @@ mod tests {
         };
         assert!(validate_target(&reply, b"blocked", pg, 0).is_ok());
         assert_eq!(
-            validate_operation(&reply, operation),
+            validate_operation(&reply, &operation),
             Err(Error::MalformedReply)
         );
 
@@ -975,7 +1533,7 @@ mod tests {
         });
         assert!(validate_target(&reply, b"blocked", pg, 0).is_ok());
         assert_eq!(
-            validate_operation(&reply, operation),
+            validate_operation(&reply, &operation),
             Err(Error::MalformedReply)
         );
     }
@@ -1041,6 +1599,7 @@ mod tests {
                     backoff(BACKOFF_BLOCK).pg,
                     &object(),
                     request_message(),
+                    false,
                     &OperationOptions::new()
                         .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
                 )
@@ -1097,6 +1656,7 @@ mod tests {
                 backoff(BACKOFF_BLOCK).pg,
                 &object(),
                 request_message(),
+                false,
                 &OperationOptions::new()
                     .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
             )
@@ -1105,5 +1665,331 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(1), session.shutdown())
             .await
             .expect("bounded shutdown");
+    }
+
+    #[tokio::test]
+    async fn flush_captures_watermark_and_waits_for_all_prior_mutations() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        );
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let (first, _) = client.admit_mutation(1, &options).await.expect("first");
+        let (second, _) = client.admit_mutation(1, &options).await.expect("second");
+        let flush_client = Arc::new(client);
+        let flush_owner = Arc::clone(&flush_client);
+        let flush_options = options.clone();
+        let flush = tokio::spawn(async move { flush_owner.flush(&flush_options).await });
+        tokio::task::yield_now().await;
+        flush_client
+            .complete_mutation(first, Some(&Error::OutcomeUnknown(UnknownCause::Transport)));
+        assert!(!flush.is_finished());
+        flush_client.complete_mutation(second, None);
+        assert_eq!(
+            flush.await.expect("flush task"),
+            Err(Error::OutcomeUnknown(UnknownCause::Transport))
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_ignores_mutations_admitted_after_its_watermark() {
+        let client = Arc::new(Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        ));
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let (first, _) = client.admit_mutation(0, &options).await.expect("first");
+        let flush_owner = Arc::clone(&client);
+        let flush_options = options.clone();
+        let flush = tokio::spawn(async move { flush_owner.flush(&flush_options).await });
+        tokio::task::yield_now().await;
+        let (second, _) = client.admit_mutation(0, &options).await.expect("second");
+        client.complete_mutation(first, None);
+        assert_eq!(flush.await.expect("flush task"), Ok(()));
+        client.complete_mutation(second, None);
+    }
+
+    #[tokio::test]
+    async fn mutation_admission_releases_capacity_after_completion() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        );
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let mut admitted = Vec::new();
+        for _ in 0..MAX_MUTATIONS {
+            admitted.push(
+                client
+                    .admit_mutation(0, &options)
+                    .await
+                    .expect("admission")
+                    .0,
+            );
+        }
+        let short = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_millis(10));
+        assert_eq!(client.admit_mutation(0, &short).await, Err(Error::Timeout));
+        client.complete_mutation(admitted[0], None);
+        assert!(client.admit_mutation(0, &options).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn unpolled_and_capacity_waiting_admission_futures_leave_no_state() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        );
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let unpolled = client.admit_mutation(1, &options);
+        drop(unpolled);
+        assert!(
+            client
+                .mutations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
+                .is_empty()
+        );
+
+        let mut admitted = Vec::new();
+        for _ in 0..MAX_MUTATIONS {
+            admitted.push(
+                client
+                    .admit_mutation(0, &options)
+                    .await
+                    .expect("admission")
+                    .0,
+            );
+        }
+        let mut waiting = Box::pin(client.admit_mutation(0, &options));
+        assert!(
+            std::future::poll_fn(|context| match waiting.as_mut().poll(context) {
+                std::task::Poll::Pending => std::task::Poll::Ready(true),
+                std::task::Poll::Ready(_) => std::task::Poll::Ready(false),
+            })
+            .await
+        );
+        drop(waiting);
+        assert_eq!(
+            client
+                .mutations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
+                .len(),
+            MAX_MUTATIONS
+        );
+        for sequence in admitted {
+            client.complete_mutation(sequence, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn dropped_result_receiver_does_not_strand_flush_or_retained_bytes() {
+        let client = Arc::new(Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        ));
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let (sequence, _) = client.admit_mutation(3, &options).await.expect("admission");
+        let (result_tx, result_rx) = oneshot::channel::<Result<(), Error>>();
+        drop(result_rx);
+        let owner = Arc::clone(&client);
+        tokio::spawn(async move {
+            owner.complete_mutation(sequence, None);
+            let _ = result_tx.send(Ok(()));
+        });
+        assert_eq!(client.flush(&options).await, Ok(()));
+        let state = client
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.retained_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn aborted_worker_guard_releases_capacity_and_makes_flush_unknown() {
+        let client = Arc::new(Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        ));
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let (sequence, _) = client.admit_mutation(7, &options).await.expect("admission");
+        let completion = MutationCompletion {
+            client: Arc::clone(&client),
+            sequence: Some(sequence),
+        };
+        let worker = tokio::spawn(async move {
+            let _completion = completion;
+            std::future::pending::<()>().await;
+        });
+        worker.abort();
+        assert!(worker.await.expect_err("aborted worker").is_cancelled());
+        assert_eq!(
+            client.flush(&options).await,
+            Err(Error::OutcomeUnknown(UnknownCause::Transport))
+        );
+        let state = client
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.retained_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn mutation_and_transaction_identity_exhaustion_fail_closed() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+        );
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        client.next_transaction.store(u64::MAX, Ordering::Relaxed);
+        assert_eq!(
+            client.admit_mutation(0, &options).await,
+            Err(Error::LimitExceeded)
+        );
+        assert!(
+            client
+                .mutations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending
+                .is_empty()
+        );
+
+        client.next_transaction.store(1, Ordering::Relaxed);
+        client
+            .mutations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .next_sequence = u64::MAX;
+        assert_eq!(
+            client.admit_mutation(0, &options).await,
+            Err(Error::LimitExceeded)
+        );
+    }
+
+    #[test]
+    fn loom_completion_and_unknown_watermark_are_atomic() {
+        loom::model(|| {
+            use loom::sync::{Arc as LoomArc, Mutex as LoomMutex};
+            use loom::thread;
+
+            let state = LoomArc::new(LoomMutex::new(MutationState {
+                next_sequence: 2,
+                pending: HashMap::from([(1, 3), (2, 5)]),
+                retained_bytes: 8,
+                ..MutationState::default()
+            }));
+            let first = LoomArc::clone(&state);
+            let first_owner = thread::spawn(move || {
+                let mut state = first.lock().expect("first lock");
+                assert!(complete_mutation_state(
+                    &mut state,
+                    1,
+                    Some(&Error::OutcomeUnknown(UnknownCause::Transport))
+                ));
+            });
+            let second = LoomArc::clone(&state);
+            let second_owner = thread::spawn(move || {
+                assert!(complete_mutation_state(
+                    &mut second.lock().expect("second lock"),
+                    2,
+                    None
+                ));
+            });
+            first_owner.join().expect("first completion");
+            second_owner.join().expect("second completion");
+            let state = state.lock().expect("flush lock");
+            assert!(state.pending.is_empty());
+            assert_eq!(state.retained_bytes, 0);
+            assert_eq!(state.earliest_unknown, Some(1));
+        });
+    }
+
+    #[test]
+    fn loom_shutdown_and_admission_are_serialized() {
+        loom::model(|| {
+            use loom::sync::{Arc as LoomArc, Mutex as LoomMutex};
+            use loom::thread;
+
+            let state = LoomArc::new(LoomMutex::new(MutationState::default()));
+            let admission_state = LoomArc::clone(&state);
+            let admission = thread::spawn(move || {
+                admit_mutation_state(&mut admission_state.lock().expect("admission lock"), 3)
+            });
+            let shutdown_state = LoomArc::clone(&state);
+            let shutdown = thread::spawn(move || {
+                close_mutation_admission_state(&mut shutdown_state.lock().expect("shutdown lock"));
+            });
+            let admitted = admission.join().expect("admission transition");
+            shutdown.join().expect("shutdown transition");
+            let state = state.lock().expect("final lock");
+            assert!(state.admission_closed);
+            match admitted {
+                Ok(Some(sequence)) => {
+                    assert_eq!(state.pending.get(&sequence), Some(&3));
+                    assert_eq!(state.retained_bytes, 3);
+                }
+                Err(Error::Closed) => {
+                    assert!(state.pending.is_empty());
+                    assert_eq!(state.retained_bytes, 0);
+                }
+                result => panic!("unexpected admission result: {result:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn acknowledgment_cannot_masquerade_as_durable_commit() {
+        let reply = Reply {
+            object: b"object".to_vec(),
+            pg: PG {
+                pool: 1,
+                seed: 2,
+                preferred: -1,
+            },
+            flags: i64::from(super::super::messages::FLAG_ACK),
+            result: 0,
+            map_epoch: 1,
+            retry: 0,
+            version: 7,
+            redirect: None,
+            operations: Vec::new(),
+        };
+        assert_eq!(
+            validate_durable_reply(&reply),
+            Err(Error::OutcomeUnknown(UnknownCause::Transport))
+        );
     }
 }

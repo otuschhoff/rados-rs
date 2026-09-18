@@ -62,6 +62,10 @@ jobs:
         run: cargo package --locked
       - name: Verify checked-in R07 evidence
         run: cargo run --locked -p rados-r07-tools --bin rados-r07-verify -- . docs/r07/live-integration-report.json
+      - name: Verify checked-in R08 evidence
+        run: |
+          cargo run --locked -p rados-r08-tools --bin rados-r08-verify -- . docs/r08/live-qualification-report.json
+          cargo run --locked -p rados-r08-tools --bin rados-r08-verify-fuzz -- . docs/r08/fuzz-validation-report.json
       - name: Install pinned audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -125,3 +129,9 @@ jobs:
           integration/r07/prepare-fuzz-corpus.sh /tmp/rados-r07-corpus
           cargo +nightly-2026-09-01 fuzz run r07_osd_reply /tmp/rados-r07-corpus/r07_osd_reply -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r07_osd_backoff /tmp/rados-r07-corpus/r07_osd_backoff -- -max_total_time=10
+      - name: Run mutation fuzz smoke tests
+        run: |
+          integration/r08/prepare-fuzz-corpus.sh /tmp/rados-r08-corpus
+          cargo +nightly-2026-09-01 fuzz run r08_mutation_request /tmp/rados-r08-corpus/r08_mutation_request -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r08_mutation_reply /tmp/rados-r08-corpus/r08_mutation_reply -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r08_mutation_recovery /tmp/rados-r08-corpus/r08_mutation_recovery -- -max_total_time=10

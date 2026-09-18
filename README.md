@@ -5,7 +5,10 @@ pure-Go reference. R00 reference capture, the R01 workspace/evidence bridge,
 R02 API contracts and bounded wire types are complete. R03 private messenger
 codecs, session state and committed-tree differential verification are complete;
 R04 CephX authentication and secure monitor sessions, R05 configuration/maps,
-R06 exact placement, and R07 read-only object I/O are complete.
+R06 exact placement, R07 read-only object I/O and R08 mutation qualification
+are complete. R08 has fresh Rust/Go/native evidence against the pinned Ceph
+20.2.4 profile; accountable human distributed-systems review remains required
+before writes are broadened in R09.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -17,6 +20,12 @@ checkout. The current library exposes locally validated ownership, error,
 options and lifecycle contracts plus private bounded wire and messenger
 machinery. The public client supports authenticated monitor discovery and
 bounded read/stat operations against the pinned replicated profile.
+
+The R08 API scope covers create, offset write, write-full, append, truncate,
+zero, remove and flush semantics, including unknown outcomes and cancellation
+boundaries. The pinned live gate passed cross-client CRUD, append-once failover
+and the first fixed-workload performance baseline. The baseline is evidence,
+not a performance parity or speedup claim.
 
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
@@ -38,6 +47,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R05 execution status](docs/r05/STATUS.md)
 - [R06 execution status](docs/r06/STATUS.md)
 - [R07 read-only object status](docs/r07/STATUS.md)
+- [R08 mutation qualification status](docs/r08/STATUS.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)

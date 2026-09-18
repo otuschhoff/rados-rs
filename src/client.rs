@@ -9,12 +9,12 @@ use crate::mon::seeds::{SeedError, SeedLimits, resolve_seeds};
 use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::session::{Config as SessionConfig, ReconnectPolicy, SessionError};
-use crate::osd::{Client as OSDClient, ClientError, NO_SNAP, Target as OSDTarget};
+use crate::osd::{Client as OSDClient, ClientError, NO_SNAP, OSDMutation, Target as OSDTarget};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectInfo, ObjectName, OperationOptions,
-    Result, SecurityMode,
+    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectInfo, ObjectName, OpResult,
+    OperationOptions, Result, SecurityMode,
 };
 use std::fmt;
 use std::future::Future;
@@ -50,7 +50,7 @@ struct ClientInner {
     lifecycle: Mutex<()>,
     monitor: RwLock<Option<Arc<MonitorClient>>>,
     authority: Arc<RwLock<Option<Arc<connector::MonitorConnector>>>>,
-    objecter: OSDClient,
+    objecter: Arc<OSDClient>,
     #[cfg(test)]
     factory: Option<SessionFactory>,
 }
@@ -84,13 +84,13 @@ impl Client {
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
         let authority = Arc::new(RwLock::new(None));
-        let objecter = OSDClient::new(
+        let objecter = Arc::new(OSDClient::new(
             Arc::clone(&authority),
             FRAME_LIMITS,
             config.dial_timeout(),
             config.handshake_timeout(),
             config.security_mode() == SecurityMode::Crc,
-        );
+        ));
         Ok(Self(Arc::new(ClientInner {
             config,
             closed: AtomicBool::new(false),
@@ -107,13 +107,13 @@ impl Client {
     fn with_factory(config: Config, factory: SessionFactory) -> Result<Self> {
         config.validate()?;
         let authority = Arc::new(RwLock::new(None));
-        let objecter = OSDClient::new(
+        let objecter = Arc::new(OSDClient::new(
             Arc::clone(&authority),
             FRAME_LIMITS,
             config.dial_timeout(),
             config.handshake_timeout(),
             config.security_mode() == SecurityMode::Crc,
-        );
+        ));
         Ok(Self(Arc::new(ClientInner {
             config,
             closed: AtomicBool::new(false),
@@ -289,9 +289,15 @@ impl Client {
     ///
     /// Returns cancellation, deadline, closure, or not-connected errors.
     pub async fn flush(&self, options: OperationOptions) -> Result<()> {
-        std::future::ready(()).await;
-        self.ready("Client::flush", &options)?;
-        Err(Error::not_connected("Client::flush"))
+        let operation = "Client::flush";
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        self.connected_monitor(operation)?;
+        self.0
+            .objecter
+            .flush(&options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))
     }
 
     /// Stops admission and drains workers once transport is available.
@@ -306,7 +312,6 @@ impl Client {
             "Client::shutdown",
         )?;
         options.check("Client::shutdown")?;
-        self.close();
         let _lifecycle = match self.0.lifecycle.try_lock() {
             Ok(guard) => guard,
             Err(_) => {
@@ -318,8 +323,17 @@ impl Client {
                 .await?
             }
         };
-        if self.0.objecter.has_sessions() {
-            wait_client_bounded(
+        self.0.objecter.begin_shutdown();
+        let flush_result = self
+            .0
+            .objecter
+            .flush(&options)
+            .await
+            .map_err(|error| map_osd_error(error, "Client::shutdown"));
+        let mut cleanup_result = Ok(());
+        self.close();
+        if self.0.objecter.has_sessions()
+            && let Err(error) = wait_client_bounded(
                 async {
                     self.0.objecter.shutdown().await;
                     Ok(())
@@ -327,14 +341,20 @@ impl Client {
                 &options,
                 "Client::shutdown",
             )
-            .await?;
+            .await
+        {
+            cleanup_result = Err(error);
         }
-        let Some(monitor) = self.monitor() else {
-            return Ok(());
-        };
-        wait_shutdown_bounded(Arc::clone(&monitor), &options, "Client::shutdown").await?;
-        self.remove_monitor(&monitor);
-        Ok(())
+        if let Some(monitor) = self.monitor() {
+            if let Err(error) =
+                wait_shutdown_bounded(Arc::clone(&monitor), &options, "Client::shutdown").await
+                && cleanup_result.is_ok()
+            {
+                cleanup_result = Err(error);
+            }
+            self.remove_monitor(&monitor);
+        }
+        flush_result.and(cleanup_result)
     }
 
     /// Idempotently closes the shared client without blocking or network I/O.
@@ -655,6 +675,21 @@ fn parse_fsid(value: &str) -> Result<Fsid> {
     Ok(Fsid(bytes))
 }
 
+impl Drop for ClientInner {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        self.objecter.close();
+        if let Some(monitor) = self
+            .monitor
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            monitor.close();
+        }
+    }
+}
+
 fn random_nonzero(operation: &'static str) -> Result<u64> {
     let mut bytes = [0_u8; 8];
     getrandom::fill(&mut bytes)
@@ -883,6 +918,156 @@ impl ObjectRef {
         })
     }
 
+    /// Creates the object, optionally requiring that it does not already exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn create(&self, exclusive: bool, options: OperationOptions) -> Result<OpResult> {
+        self.mutate(
+            "ObjectRef::create",
+            OSDMutation::Create { exclusive },
+            options,
+        )
+        .await
+    }
+
+    /// Writes owned bytes at `offset` without truncating other extents.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn write(
+        &self,
+        offset: u64,
+        data: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let data = data.as_ref();
+        offset
+            .checked_add(u64::try_from(data.len()).map_err(|_| Error::invalid("ObjectRef::write"))?)
+            .ok_or_else(|| Error::invalid("ObjectRef::write"))?;
+        self.mutate(
+            "ObjectRef::write",
+            OSDMutation::Write { offset, data },
+            options,
+        )
+        .await
+    }
+
+    /// Atomically replaces the complete object contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn write_full(
+        &self,
+        data: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.mutate(
+            "ObjectRef::write_full",
+            OSDMutation::WriteFull(data.as_ref()),
+            options,
+        )
+        .await
+    }
+
+    /// Appends owned bytes to the object.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn append(
+        &self,
+        data: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.mutate(
+            "ObjectRef::append",
+            OSDMutation::Append(data.as_ref()),
+            options,
+        )
+        .await
+    }
+
+    /// Changes the object size, zero-filling growth as defined by RADOS.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn truncate(&self, size: u64, options: OperationOptions) -> Result<OpResult> {
+        self.mutate(
+            "ObjectRef::truncate",
+            OSDMutation::Truncate { size },
+            options,
+        )
+        .await
+    }
+
+    /// Zeroes an object extent.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn zero(
+        &self,
+        offset: u64,
+        length: u64,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        offset
+            .checked_add(length)
+            .ok_or_else(|| Error::invalid("ObjectRef::zero"))?;
+        self.mutate(
+            "ObjectRef::zero",
+            OSDMutation::Zero { offset, length },
+            options,
+        )
+        .await
+    }
+
+    /// Removes the object.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn remove(&self, options: OperationOptions) -> Result<OpResult> {
+        self.mutate("ObjectRef::remove", OSDMutation::Remove, options)
+            .await
+    }
+
+    async fn mutate(
+        &self,
+        operation: &'static str,
+        request: OSDMutation<'_>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let options = bounded_options(
+            options,
+            self.pool.client.0.config.operation_timeout(),
+            operation,
+        )?;
+        self.pool.client.ready(operation, &options)?;
+        if self.pool.read_snapshot.is_some() {
+            return Err(Error::invalid(operation));
+        }
+        let monitor = self.pool.client.connected_monitor(operation)?;
+        let target = self.target(&monitor, operation)?;
+        let result = self
+            .pool
+            .client
+            .0
+            .objecter
+            .mutate(monitor, target, request, options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))?;
+        Ok(OpResult {
+            version: result.version,
+            results: Vec::new(),
+        })
+    }
+
     fn target(&self, monitor: &MonitorClient, operation: &'static str) -> Result<OSDTarget> {
         let pool_id = if let Some(id) = self.pool.id {
             id
@@ -917,6 +1102,14 @@ fn map_osd_error(error: ClientError, operation: &'static str) -> Error {
         ClientError::Timeout => (ErrorKind::Timeout, None),
         ClientError::Cancelled => (ErrorKind::Canceled, None),
         ClientError::QueueSaturated => (ErrorKind::Conflict, None),
+        ClientError::OutcomeUnknown(cause) => {
+            let cause = match cause {
+                crate::osd::UnknownCause::Cancelled => ErrorKind::Canceled,
+                crate::osd::UnknownCause::Timeout => ErrorKind::Timeout,
+                crate::osd::UnknownCause::Transport => ErrorKind::NotConnected,
+            };
+            return Error::outcome_unknown(cause).with_operation(operation);
+        }
         ClientError::WireErrno(errno) => (wire_error_kind(errno), Some(errno)),
     };
     wire_errno.map_or_else(
@@ -1309,6 +1502,35 @@ mod tests {
             clone.pool(b"pool").expect_err("closed").kind(),
             ErrorKind::Closed
         );
+    }
+
+    #[tokio::test]
+    async fn canceled_shutdown_wait_leaves_mutation_admission_open() {
+        let client = client();
+        let lifecycle = client.0.lifecycle.lock().await;
+        let cancellation = CancellationToken::new();
+        let shutdown = tokio::spawn({
+            let client = client.clone();
+            let cancellation = cancellation.clone();
+            async move {
+                client
+                    .shutdown(OperationOptions::new().with_cancellation(cancellation))
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        cancellation.cancel();
+        assert_eq!(
+            shutdown
+                .await
+                .expect("shutdown task")
+                .expect_err("canceled")
+                .kind(),
+            ErrorKind::Canceled
+        );
+        assert!(!client.0.objecter.mutation_admission_is_closed());
+        assert!(!client.is_closed());
+        drop(lifecycle);
     }
 
     #[tokio::test]

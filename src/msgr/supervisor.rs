@@ -222,6 +222,12 @@ impl Request {
     }
 
     pub(crate) async fn result(mut self) -> Result<Option<Message>, SessionError> {
+        let outcome = self.wait_result().await;
+        self.cancel_on_drop = false;
+        outcome
+    }
+
+    pub(crate) async fn wait_result(&mut self) -> Result<Option<Message>, SessionError> {
         let outcome = self
             .result
             .as_mut()
@@ -233,14 +239,21 @@ impl Request {
         outcome
     }
 
-    pub(crate) async fn cancel(mut self) -> Result<Option<Message>, SessionError> {
+    pub(crate) async fn cancel(&mut self) -> Result<Option<Message>, SessionError> {
         self.cancel_on_drop = false;
-        self.commands
+        if self
+            .commands
             .send(Command::Cancel {
                 request_id: self.id,
             })
             .await
-            .map_err(|_| SessionError::Closed)?;
+            .is_err()
+        {
+            return match self.result.take() {
+                Some(result) => result.await.unwrap_or(Err(SessionError::OutcomeUnknown)),
+                None => Err(SessionError::OutcomeUnknown),
+            };
+        }
         self.result
             .take()
             .ok_or(SessionError::Closed)?
@@ -527,7 +540,7 @@ mod tests {
     async fn explicit_cancel_distinguishes_unsent_and_dispatched_work() {
         let connector: Connector = Arc::new(|| Box::pin(std::future::pending()));
         let disconnected = Session::spawn(machine(4), None, Some(connector));
-        let unsent = disconnected
+        let mut unsent = disconnected
             .admit(message(b"unsent"), false)
             .await
             .expect("admit unsent");
@@ -536,7 +549,7 @@ mod tests {
 
         let (client, _server) = duplex(1);
         let dispatched = Session::spawn(machine(4), Some(setup(client)), None);
-        let request = dispatched
+        let mut request = dispatched
             .admit(message(&[7; 128]), false)
             .await
             .expect("admit dispatched");

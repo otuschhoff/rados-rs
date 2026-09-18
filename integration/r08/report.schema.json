@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "started_at", "finished_at", "schema_sha256", "rust", "go", "native", "server", "scenarios", "performance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite_id": {"const": "r08/mutation-qualification-v1"},
+    "status": {"const": "passed"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "schema_sha256": {"$ref": "#/$defs/sha256"},
+    "rust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256"],
+      "properties": {
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "compiler_image": {"const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922"},
+        "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+        "binary_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "go": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "tree", "compiler", "platform", "binary_sha256"],
+      "properties": {
+        "revision": {"const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4"},
+        "tree": {"const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7"},
+        "compiler": {"const": "go1.26.8"},
+        "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+        "binary_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "native": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "binary_sha256"],
+      "properties": {
+        "version": {"const": "librados2-20.2.4-0.el9"},
+        "binary_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": {"const": "7f793731f1b39eb4f465e960113d2363c311b964"},
+        "version": {"const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"},
+        "image": {"const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"},
+        "binary_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "scenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["create", "write", "write_full", "append", "truncate", "zero", "remove", "cross_client_crud", "append_once_failover_lost_reply", "ack_vs_commit", "flush_watermark", "cancellation_drop_boundaries", "performance_baseline"],
+      "properties": {
+        "create": {"const": "passed"},
+        "write": {"const": "passed"},
+        "write_full": {"const": "passed"},
+        "append": {"const": "passed"},
+        "truncate": {"const": "passed"},
+        "zero": {"const": "passed"},
+        "remove": {"const": "passed"},
+        "cross_client_crud": {"const": "passed"},
+        "append_once_failover_lost_reply": {"const": "passed"},
+        "ack_vs_commit": {"const": "passed"},
+        "flush_watermark": {"const": "passed"},
+        "cancellation_drop_boundaries": {"const": "passed"},
+        "performance_baseline": {"const": "passed"}
+      }
+    },
+    "performance": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/performance"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation", "workload", "payload_bytes", "concurrency", "operations", "elapsed_seconds", "operations_per_second", "latency_p50_microseconds", "latency_p95_microseconds", "latency_p99_microseconds", "cpu_user_seconds", "cpu_system_seconds", "allocation_metric", "retained_bytes", "peak_rss_bytes"],
+      "properties": {
+        "implementation": {"enum": ["rust", "go", "native"]},
+        "workload": {"const": "write-full-baseline-v1"},
+        "payload_bytes": {"const": 4096},
+        "concurrency": {"const": 1},
+        "operations": {"const": 128},
+        "elapsed_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "operations_per_second": {"type": "number", "exclusiveMinimum": 0},
+        "latency_p50_microseconds": {"type": "number", "exclusiveMinimum": 0},
+        "latency_p95_microseconds": {"type": "number", "exclusiveMinimum": 0},
+        "latency_p99_microseconds": {"type": "number", "exclusiveMinimum": 0},
+        "cpu_user_seconds": {"type": "number", "minimum": 0},
+        "cpu_system_seconds": {"type": "number", "minimum": 0},
+        "allocation_metric": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "value"],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "value": {"type": "integer", "minimum": 1}
+          }
+        },
+        "retained_bytes": {"type": "integer", "minimum": 1},
+        "peak_rss_bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

@@ -22,7 +22,7 @@ cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
 hmac = "=0.13.0"
 libfuzzer-sys = "=0.4.13"
-rados = { package = "rados-rs", path = "..", features = ["r05-integration", "r06-integration", "r07-integration"] }
+rados = { package = "rados-rs", path = "..", features = ["r05-integration", "r06-integration", "r07-integration", "r08-integration"] }
 sha2 = "=0.11.0"
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
@@ -212,6 +212,27 @@ bench = false
 [[bin]]
 name = "r07_osd_backoff"
 path = "fuzz_targets/r07_osd_backoff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r08_mutation_request"
+path = "fuzz_targets/r08_mutation_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r08_mutation_reply"
+path = "fuzz_targets/r08_mutation_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r08_mutation_recovery"
+path = "fuzz_targets/r08_mutation_recovery.rs"
 test = false
 doc = false
 bench = false
