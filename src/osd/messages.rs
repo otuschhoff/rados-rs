@@ -8,6 +8,15 @@ const MESSAGE_OSD_OP: u16 = 42;
 const MESSAGE_OSD_OP_REPLY: u16 = 43;
 const OP_READ: u16 = 0x1201;
 const OP_STAT: u16 = 0x1202;
+const OP_ASSERT_VERSION: u16 = 0x1208;
+const OP_OMAP_GET_VALUES: u16 = 0x1212;
+const OP_OMAP_GET_HEADER: u16 = 0x1213;
+const OP_OMAP_GET_VALUES_BY_KEYS: u16 = 0x1214;
+const OP_OMAP_COMPARE: u16 = 0x1219;
+const OP_COMPARE_EXTENT: u16 = 0x1220;
+const OP_GET_XATTR: u16 = 0x1301;
+const OP_GET_XATTRS: u16 = 0x1302;
+const OP_PGN_LIST: u16 = 0x1505;
 const OP_WRITE: u16 = 0x2201;
 const OP_WRITE_FULL: u16 = 0x2202;
 const OP_TRUNCATE: u16 = 0x2203;
@@ -15,15 +24,25 @@ const OP_ZERO: u16 = 0x2204;
 const OP_DELETE: u16 = 0x2205;
 const OP_APPEND: u16 = 0x2206;
 const OP_CREATE: u16 = 0x220d;
+const OP_OMAP_SET_VALUES: u16 = 0x2215;
+const OP_OMAP_SET_HEADER: u16 = 0x2216;
+const OP_OMAP_CLEAR: u16 = 0x2217;
+const OP_OMAP_REMOVE_KEYS: u16 = 0x2218;
+const OP_OMAP_REMOVE_RANGE: u16 = 0x222c;
+const OP_SET_XATTR: u16 = 0x2301;
+const OP_REMOVE_XATTR: u16 = 0x2304;
 const OP_FLAG_EXCLUSIVE: u32 = 0x0001;
+pub(crate) const OP_FLAG_FAIL_OK: u32 = 0x0002;
 pub(crate) const FLAG_ACK: u32 = 0x0001;
 pub(crate) const FLAG_ON_DISK: u32 = 0x0004;
 const FLAG_READ: u32 = 0x0010;
+pub(crate) const FLAG_PG_OP: u32 = 0x0400;
 pub(crate) const FLAG_WRITE: u32 = 0x0020;
 pub(crate) const FLAG_RETRY: u32 = 0x0008;
 pub(crate) const FLAG_IGNORE_CACHE: u32 = 0x8000;
 pub(crate) const FLAG_IGNORE_OVERLAY: u32 = 0x2_0000;
 pub(crate) const FLAG_REDIRECTED: u32 = 0x20_0000;
+pub(crate) const FLAG_RETURN_VECTOR: u32 = 0x0400_0000;
 pub(crate) const NO_SNAP: u64 = u64::MAX - 1;
 const OPERATION_DESCRIPTOR_SIZE: usize = 38;
 
@@ -35,15 +54,59 @@ pub(crate) struct Limits {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Operation {
-    Read { offset: u64, length: u64 },
+    Read {
+        offset: u64,
+        length: u64,
+    },
     Stat,
-    Create { exclusive: bool },
-    Write { offset: u64, data: Vec<u8> },
+    AssertVersion(u64),
+    CompareExtent {
+        offset: u64,
+        data: Vec<u8>,
+    },
+    GetXattr(Vec<u8>),
+    GetXattrs,
+    SetXattr {
+        name: Vec<u8>,
+        value: Vec<u8>,
+    },
+    RemoveXattr(Vec<u8>),
+    OmapGetValues(Vec<u8>),
+    OmapGetHeader,
+    OmapGetValuesByKeys(Vec<u8>),
+    OmapCompare(Vec<u8>),
+    OmapSetValues(Vec<u8>),
+    OmapSetHeader(Vec<u8>),
+    OmapClear,
+    OmapRemoveKeys(Vec<u8>),
+    OmapRemoveRange(Vec<u8>),
+    PGNList {
+        cursor: Vec<u8>,
+        cursor_hash: u32,
+        count: u64,
+        start_epoch: u32,
+    },
+    Create {
+        exclusive: bool,
+    },
+    Write {
+        offset: u64,
+        data: Vec<u8>,
+    },
     WriteFull(Vec<u8>),
     Append(Vec<u8>),
-    Truncate { size: u64 },
-    Zero { offset: u64, length: u64 },
+    Truncate {
+        size: u64,
+    },
+    Zero {
+        offset: u64,
+        length: u64,
+    },
     Remove,
+    WithFlags {
+        operation: Box<Self>,
+        flags: u32,
+    },
 }
 
 impl Operation {
@@ -51,6 +114,22 @@ impl Operation {
         match self {
             Self::Read { .. } => OP_READ,
             Self::Stat => OP_STAT,
+            Self::AssertVersion(_) => OP_ASSERT_VERSION,
+            Self::CompareExtent { .. } => OP_COMPARE_EXTENT,
+            Self::GetXattr(_) => OP_GET_XATTR,
+            Self::GetXattrs => OP_GET_XATTRS,
+            Self::SetXattr { .. } => OP_SET_XATTR,
+            Self::RemoveXattr(_) => OP_REMOVE_XATTR,
+            Self::OmapGetValues(_) => OP_OMAP_GET_VALUES,
+            Self::OmapGetHeader => OP_OMAP_GET_HEADER,
+            Self::OmapGetValuesByKeys(_) => OP_OMAP_GET_VALUES_BY_KEYS,
+            Self::OmapCompare(_) => OP_OMAP_COMPARE,
+            Self::OmapSetValues(_) => OP_OMAP_SET_VALUES,
+            Self::OmapSetHeader(_) => OP_OMAP_SET_HEADER,
+            Self::OmapClear => OP_OMAP_CLEAR,
+            Self::OmapRemoveKeys(_) => OP_OMAP_REMOVE_KEYS,
+            Self::OmapRemoveRange(_) => OP_OMAP_REMOVE_RANGE,
+            Self::PGNList { .. } => OP_PGN_LIST,
             Self::Create { .. } => OP_CREATE,
             Self::Write { .. } => OP_WRITE,
             Self::WriteFull(_) => OP_WRITE_FULL,
@@ -58,17 +137,77 @@ impl Operation {
             Self::Truncate { .. } => OP_TRUNCATE,
             Self::Zero { .. } => OP_ZERO,
             Self::Remove => OP_DELETE,
+            Self::WithFlags { operation, .. } => operation.code(),
         }
     }
 
     pub(crate) const fn is_mutation(&self) -> bool {
-        !matches!(self, Self::Read { .. } | Self::Stat)
+        match self {
+            Self::WithFlags { operation, .. } => operation.is_mutation(),
+            _ => self.code() & 0x2000 != 0,
+        }
     }
 
-    pub(crate) fn data(&self) -> &[u8] {
+    pub(crate) const fn route_hash(&self) -> Option<u32> {
         match self {
-            Self::Write { data, .. } | Self::WriteFull(data) | Self::Append(data) => data,
-            _ => &[],
+            Self::PGNList { cursor_hash, .. } => Some(*cursor_hash),
+            Self::WithFlags { operation, .. } => operation.route_hash(),
+            _ => None,
+        }
+    }
+
+    fn append_data(&self, output: &mut Vec<u8>) {
+        match self {
+            Self::Write { data, .. }
+            | Self::WriteFull(data)
+            | Self::Append(data)
+            | Self::CompareExtent { data, .. }
+            | Self::GetXattr(data)
+            | Self::RemoveXattr(data)
+            | Self::OmapGetValues(data)
+            | Self::OmapGetValuesByKeys(data)
+            | Self::OmapCompare(data)
+            | Self::OmapSetValues(data)
+            | Self::OmapSetHeader(data)
+            | Self::OmapRemoveKeys(data)
+            | Self::OmapRemoveRange(data)
+            | Self::PGNList { cursor: data, .. } => output.extend_from_slice(data),
+            Self::SetXattr { name, value } => {
+                output.extend_from_slice(name);
+                output.extend_from_slice(value);
+            }
+            Self::WithFlags { operation, .. } => operation.append_data(output),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn data_len(&self) -> usize {
+        match self {
+            Self::SetXattr { name, value } => name.len().saturating_add(value.len()),
+            Self::WithFlags { operation, .. } => operation.data_len(),
+            Self::Write { data, .. }
+            | Self::WriteFull(data)
+            | Self::Append(data)
+            | Self::CompareExtent { data, .. }
+            | Self::GetXattr(data)
+            | Self::RemoveXattr(data)
+            | Self::OmapGetValues(data)
+            | Self::OmapGetValuesByKeys(data)
+            | Self::OmapCompare(data)
+            | Self::OmapSetValues(data)
+            | Self::OmapSetHeader(data)
+            | Self::OmapRemoveKeys(data)
+            | Self::OmapRemoveRange(data)
+            | Self::PGNList { cursor: data, .. } => data.len(),
+            _ => 0,
+        }
+    }
+
+    pub(crate) const fn flags(&self) -> u32 {
+        match self {
+            Self::Create { exclusive: true } => OP_FLAG_EXCLUSIVE,
+            Self::WithFlags { operation, flags } => operation.flags() | *flags,
+            _ => 0,
         }
     }
 }
@@ -159,7 +298,7 @@ pub(crate) fn encode_request(request: &Request<'_>, limits: Limits) -> Result<Me
         .iter()
         .try_fold(0_usize, |total, operation| {
             total
-                .checked_add(operation.data().len())
+                .checked_add(operation.data_len())
                 .ok_or(WireError::LimitExceeded)
         })?;
 
@@ -207,7 +346,7 @@ pub(crate) fn encode_request(request: &Request<'_>, limits: Limits) -> Result<Me
     }
     let mut data = Vec::with_capacity(data_length);
     for operation in request.operations {
-        data.extend_from_slice(operation.data());
+        operation.append_data(&mut data);
     }
     Ok(Message {
         header: MessageHeader {
@@ -349,34 +488,75 @@ fn encode_locator(encoder: &mut Encoder, pool: i64, locator: &[u8], namespace: &
 
 fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
     encoder.u16(operation.code());
-    encoder.u32(match operation {
-        Operation::Create { exclusive: true } => OP_FLAG_EXCLUSIVE,
-        _ => 0,
-    });
+    encoder.u32(operation.flags());
+    let operation = match operation {
+        Operation::WithFlags { operation, .. } => operation.as_ref(),
+        operation => operation,
+    };
     match operation {
+        Operation::GetXattr(name) | Operation::RemoveXattr(name) => {
+            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
+            encoder.u32(0);
+            encoder.raw(&[0; 20]);
+        }
+        Operation::GetXattrs => encoder.raw(&[0; 28]),
+        Operation::SetXattr { name, value } => {
+            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
+            encoder.u32(u32::try_from(value.len()).unwrap_or(u32::MAX));
+            encoder.raw(&[0; 20]);
+        }
+        Operation::AssertVersion(version) => {
+            encoder.u64(0);
+            encoder.u64(*version);
+            encoder.raw(&[0; 12]);
+        }
         Operation::Read { offset, length } | Operation::Zero { offset, length } => {
             encoder.u64(*offset);
             encoder.u64(*length);
+            encoder.raw(&[0; 12]);
         }
-        Operation::Write { offset, data } => {
+        Operation::Write { offset, data } | Operation::CompareExtent { offset, data } => {
             encoder.u64(*offset);
             encoder.u64(data.len() as u64);
+            encoder.raw(&[0; 12]);
         }
-        Operation::WriteFull(data) | Operation::Append(data) => {
+        Operation::WriteFull(data)
+        | Operation::Append(data)
+        | Operation::OmapGetValues(data)
+        | Operation::OmapGetValuesByKeys(data)
+        | Operation::OmapCompare(data)
+        | Operation::OmapSetValues(data)
+        | Operation::OmapSetHeader(data)
+        | Operation::OmapRemoveKeys(data)
+        | Operation::OmapRemoveRange(data) => {
             encoder.u64(0);
             encoder.u64(data.len() as u64);
+            encoder.raw(&[0; 12]);
         }
         Operation::Truncate { size } => {
             encoder.u64(*size);
             encoder.u64(0);
+            encoder.raw(&[0; 12]);
         }
-        Operation::Stat | Operation::Create { .. } | Operation::Remove => {
+        Operation::PGNList {
+            count, start_epoch, ..
+        } => {
+            encoder.u64(*count);
+            encoder.u32(*start_epoch);
+            encoder.raw(&[0; 16]);
+        }
+        Operation::Stat
+        | Operation::OmapGetHeader
+        | Operation::OmapClear
+        | Operation::Create { .. }
+        | Operation::Remove => {
             encoder.u64(0);
             encoder.u64(0);
+            encoder.raw(&[0; 12]);
         }
+        Operation::WithFlags { .. } => unreachable!("flags wrapper was removed"),
     }
-    encoder.raw(&[0; 12]);
-    encoder.u32(u32::try_from(operation.data().len()).unwrap_or(u32::MAX));
+    encoder.u32(u32::try_from(operation.data_len()).unwrap_or(u32::MAX));
 }
 
 fn decode_redirect(decoder: &mut Decoder<'_>) -> Result<Redirect, Error> {
@@ -501,6 +681,27 @@ mod tests {
     }
 
     #[test]
+    fn compound_request_preserves_return_vector_flag() {
+        let mut value = request(&[Operation::Stat, Operation::Stat]);
+        value.flags = FLAG_RETURN_VECTOR;
+        let message = encode_request(
+            &value,
+            Limits {
+                max_operations: 2,
+                ..LIMITS
+            },
+        )
+        .expect("request");
+        let mut decoder = Decoder::new(&message.front, LIMITS.max_bytes as usize);
+        let (_, mut spg) = decoder.versioned(1);
+        decode_pg(&mut spg).expect("pg");
+        spg.i8();
+        decoder.u32();
+        decoder.u32();
+        assert_eq!(decoder.u32(), FLAG_READ | FLAG_RETURN_VECTOR);
+    }
+
+    #[test]
     fn mutation_descriptors_preserve_fields_and_payload_lengths() {
         let operations = [
             Operation::Create { exclusive: true },
@@ -571,6 +772,84 @@ mod tests {
         )
         .expect("mutation request");
         assert_eq!(request.data, b"xyfullabc");
+    }
+
+    #[test]
+    fn metadata_descriptors_preserve_unions_flags_and_payload_boundaries() {
+        let operations = [
+            Operation::AssertVersion(0x0102_0304_0506_0708),
+            Operation::CompareExtent {
+                offset: 9,
+                data: b"compare".to_vec(),
+            },
+            Operation::GetXattr(b"name".to_vec()),
+            Operation::SetXattr {
+                name: b"key".to_vec(),
+                value: b"value".to_vec(),
+            },
+            Operation::WithFlags {
+                operation: Box::new(Operation::Create { exclusive: true }),
+                flags: OP_FLAG_FAIL_OK,
+            },
+            Operation::OmapSetValues(b"omap".to_vec()),
+        ];
+        let mut encoder = Encoder::new(4096);
+        for operation in &operations {
+            encode_operation(&mut encoder, operation);
+        }
+        let bytes = encoder.finish().expect("descriptors");
+        let mut decoder = Decoder::new(&bytes, bytes.len());
+
+        assert_eq!(decoder.u16(), OP_ASSERT_VERSION);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.u64(), 0x0102_0304_0506_0708);
+        assert_eq!(decoder.raw(12), vec![0; 12]);
+        assert_eq!(decoder.u32(), 0);
+
+        assert_eq!(decoder.u16(), OP_COMPARE_EXTENT);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u64(), 9);
+        assert_eq!(decoder.u64(), 7);
+        assert_eq!(decoder.raw(12), vec![0; 12]);
+        assert_eq!(decoder.u32(), 7);
+
+        assert_eq!(decoder.u16(), OP_GET_XATTR);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u32(), 4);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.raw(20), vec![0; 20]);
+        assert_eq!(decoder.u32(), 4);
+
+        assert_eq!(decoder.u16(), OP_SET_XATTR);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u32(), 3);
+        assert_eq!(decoder.u32(), 5);
+        assert_eq!(decoder.raw(20), vec![0; 20]);
+        assert_eq!(decoder.u32(), 8);
+
+        assert_eq!(decoder.u16(), OP_CREATE);
+        assert_eq!(decoder.u32(), OP_FLAG_EXCLUSIVE | OP_FLAG_FAIL_OK);
+        assert_eq!(decoder.raw(28), vec![0; 28]);
+        assert_eq!(decoder.u32(), 0);
+
+        assert_eq!(decoder.u16(), OP_OMAP_SET_VALUES);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.u64(), 4);
+        assert_eq!(decoder.raw(12), vec![0; 12]);
+        assert_eq!(decoder.u32(), 4);
+        decoder.finish().expect("descriptor fields");
+
+        let request = encode_request(
+            &request(&operations),
+            Limits {
+                max_operations: 6,
+                ..LIMITS
+            },
+        )
+        .expect("request");
+        assert_eq!(request.data, b"comparenamekeyvalueomap");
     }
 
     #[test]

@@ -157,7 +157,7 @@ fn encode_spg(encoder: &mut Encoder, pg: PG, shard: i8) {
     });
 }
 
-fn decode_hobject(decoder: &mut Decoder<'_>) -> Result<HObject, WireError> {
+pub(crate) fn decode_hobject(decoder: &mut Decoder<'_>) -> Result<HObject, WireError> {
     let (version, mut payload) = decoder.versioned(4);
     decoder.finish()?;
     if !(3..=4).contains(&version) {
@@ -191,7 +191,7 @@ fn decode_hobject(decoder: &mut Decoder<'_>) -> Result<HObject, WireError> {
     })
 }
 
-fn encode_hobject(encoder: &mut Encoder, object: &HObject) {
+pub(crate) fn encode_hobject(encoder: &mut Encoder, object: &HObject) {
     encoder.versioned(4, 3, |payload| {
         payload.bytes(&object.key);
         payload.bytes(&object.object);
@@ -203,7 +203,7 @@ fn encode_hobject(encoder: &mut Encoder, object: &HObject) {
     });
 }
 
-fn compare_hobject(left: &HObject, right: &HObject) -> Ordering {
+pub(crate) fn compare_hobject(left: &HObject, right: &HObject) -> Ordering {
     if left.max && right.max {
         return Ordering::Equal;
     }

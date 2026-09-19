@@ -5,10 +5,9 @@ pure-Go reference. R00 reference capture, the R01 workspace/evidence bridge,
 R02 API contracts and bounded wire types are complete. R03 private messenger
 codecs, session state and committed-tree differential verification are complete;
 R04 CephX authentication and secure monitor sessions, R05 configuration/maps,
-R06 exact placement, R07 read-only object I/O and R08 mutation qualification
-are complete. R08 has fresh Rust/Go/native evidence against the pinned Ceph
-20.2.4 profile; accountable human distributed-systems review remains required
-before writes are broadened in R09.
+R06 exact placement, R07 read-only object I/O, R08 mutation qualification and
+R09 metadata, atomic builders and enumeration are complete. R09 has fresh
+Rust/Go/native evidence against the pinned Ceph 20.2.4 replicated profile.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -26,6 +25,12 @@ zero, remove and flush semantics, including unknown outcomes and cancellation
 boundaries. The pinned live gate passed cross-client CRUD, append-once failover
 and the first fixed-workload performance baseline. The baseline is evidence,
 not a performance parity or speedup claim.
+
+The R09 API scope adds binary-safe xattrs and OMAP, bounded consuming read and
+write compounds with ordered sub-operation results, and namespace-aware object
+enumeration with opaque cursors. The live gate passed native interoperability,
+conditional contention, failed-compound atomicity, namespace isolation,
+partitioned scans and continuation across a live PG-count change.
 
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
@@ -48,6 +53,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R06 execution status](docs/r06/STATUS.md)
 - [R07 read-only object status](docs/r07/STATUS.md)
 - [R08 mutation qualification status](docs/r08/STATUS.md)
+- [R09 metadata, compound and enumeration status](docs/r09/STATUS.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)

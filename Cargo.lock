@@ -1125,6 +1125,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rados-r09-tools"
+version = "0.0.0"
+dependencies = [
+ "rados-rs",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "rados-rs"
 version = "0.0.0"
 dependencies = [

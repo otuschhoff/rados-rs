@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "suite_id": "r09/metadata-compound-enumeration-v1",
+  "status": "passed",
+  "started_at": "2026-09-19T07:28:11Z",
+  "finished_at": "2026-09-19T07:31:12Z",
+  "schema_sha256": "ecf10cf85039a4294f5623e6ff40927adbe26255a56704228091f580e3e3d07c",
+  "rust": {
+    "revision": "2dde26c5fb0f8959841cbed6c49f36532613288e",
+    "tree": "26aafd08cc778216b9c484d20361da209a51559b",
+    "source_sha256": "14e5c711409384bc73123932931233a6cc6584ce89bbd768cb0955f818538cf0",
+    "compiler_image": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922",
+    "platform": "linux/arm64",
+    "binary_sha256": "2a7dad25badbd91e65c6101035a35da40ac6deb955ee82f4dacbb30dd6d792ee"
+  },
+  "go": {
+    "revision": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+    "tree": "c5039b6b50a05b942a902f70dc2fcb090463e8c7",
+    "compiler": "go1.26.8",
+    "platform": "linux/arm64",
+    "binary_sha256": "2ce67faf7c6b6bf70585e5df09f488418c0ae8671086b42a8710036dd911d79a"
+  },
+  "native": {
+    "version": "librados2-20.2.4-0.el9",
+    "binary_sha256": "7a968b913b06697d950fbb15f8bb128810fff458169a7fc3528d841fef2367fb",
+    "rust_seed": {
+      "native_binary_metadata": true,
+      "native_compound_seed": true
+    },
+    "rust_verify": {
+      "go_binary_metadata": true,
+      "go_omap_native_read": true,
+      "go_enumeration_native_read": true,
+      "namespace_filtering": true
+    },
+    "go_seed": {
+      "native_binary_metadata": true,
+      "native_compound_seed": true
+    },
+    "go_verify": {
+      "go_binary_metadata": true,
+      "go_omap_native_read": true,
+      "go_enumeration_native_read": true,
+      "namespace_filtering": true
+    }
+  },
+  "server": {
+    "source_anchor_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "image": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa",
+    "binary_sha256": "5fbad656b7f1bd900a0c40990a81be8dff523555ed0b2c957e38f29beb33608a"
+  },
+  "cluster": {
+    "fsid": "11111111-2222-4333-8444-888888888888",
+    "osds": 3,
+    "pool": "p08-data",
+    "replicas": 2,
+    "initial_pgs": 16,
+    "final_pgs": 32
+  },
+  "probes": {
+    "rust": {
+      "native_metadata": true,
+      "binary_metadata": true,
+      "omap_pagination": true,
+      "compound_read": true,
+      "compound_atomicity": true,
+      "cross_client_contention": true,
+      "enumeration": true,
+      "namespaces": true,
+      "cursor_continuation": true,
+      "cursor_partitioning": true
+    },
+    "go": {
+      "native_metadata": true,
+      "binary_metadata": true,
+      "omap_pagination": true,
+      "compound_read": true,
+      "compound_atomicity": true,
+      "cross_client_contention": true,
+      "enumeration": true,
+      "namespaces": true,
+      "cursor_continuation": true,
+      "cursor_partitioning": true
+    }
+  },
+  "scenarios": {
+    "native_metadata": "passed",
+    "binary_metadata": "passed",
+    "omap_pagination": "passed",
+    "compound_read": "passed",
+    "compound_atomicity": "passed",
+    "cross_client_contention": "passed",
+    "enumeration": "passed",
+    "namespaces": "passed",
+    "cursor_continuation": "passed",
+    "cursor_partitioning": "passed"
+  }
+}

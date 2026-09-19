@@ -1,6 +1,8 @@
-use crate::{Error, Result};
+use crate::osd::messages::{OP_FLAG_FAIL_OK, Operation};
+use crate::osd::metadata::{self, Entry};
+use crate::{Error, OmapEntry, Result, SubOperationFlags};
 
-const MAX_SUB_OPERATIONS: usize = 1_024;
+const MAX_SUB_OPERATIONS: usize = 16;
 const MAX_OPERATION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -9,6 +11,10 @@ enum ReadAction {
     Stat,
     AssertExists,
     AssertVersion(u64),
+    GetXattr(Vec<u8>),
+    GetOmapHeader,
+    ListOmap(Vec<u8>),
+    WithFlags { action: Box<Self>, flags: u32 },
 }
 
 /// A bounded, single-use atomic read-operation builder.
@@ -73,6 +79,69 @@ impl ReadOp {
     pub fn assert_version(self, version: u64) -> Result<Self> {
         self.push(ReadAction::AssertVersion(version))
     }
+
+    /// Appends an extended-attribute read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an empty or NUL-containing name or operation overflow.
+    pub fn get_xattr(self, name: impl AsRef<[u8]>) -> Result<Self> {
+        let name = valid_xattr_name(name.as_ref(), "ReadOp::get_xattr")?;
+        self.push(ReadAction::GetXattr(name))
+    }
+
+    /// Appends an OMAP-header read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the operation bound is reached.
+    pub fn get_omap_header(self) -> Result<Self> {
+        self.push(ReadAction::GetOmapHeader)
+    }
+
+    /// Appends a bounded OMAP page read after `after`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for a zero limit, oversized payload, or operation overflow.
+    pub fn list_omap(self, after: impl AsRef<[u8]>, limit: u64) -> Result<Self> {
+        if limit == 0 {
+            return Err(Error::invalid("ReadOp::list_omap"));
+        }
+        let payload = metadata::encode_list_request(after.as_ref(), limit, MAX_OPERATION_BYTES)
+            .map_err(|_| Error::invalid("ReadOp::list_omap"))?;
+        self.push(ReadAction::ListOmap(payload))
+    }
+
+    /// Applies flags to an existing sub-operation by its zero-based result index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unknown index or unsupported flag.
+    pub fn set_flags(mut self, index: usize, flags: SubOperationFlags) -> Result<Self> {
+        if index >= self.actions.len() || flags.bits() & !OP_FLAG_FAIL_OK != 0 {
+            return Err(Error::invalid("ReadOp::set_flags"));
+        }
+        let action = match self.actions.remove(index) {
+            ReadAction::WithFlags { action, .. } => *action,
+            action => action,
+        };
+        self.actions.insert(
+            index,
+            ReadAction::WithFlags {
+                action: Box::new(action),
+                flags: flags.bits(),
+            },
+        );
+        Ok(self)
+    }
+
+    pub(crate) fn into_operations(self) -> Result<Vec<Operation>> {
+        if self.actions.is_empty() {
+            return Err(Error::invalid("ReadOp"));
+        }
+        Ok(self.actions.into_iter().map(read_operation).collect())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -85,6 +154,16 @@ enum WriteAction {
     Zero { offset: u64, length: u64 },
     Remove,
     AssertVersion(u64),
+    CompareExtent { offset: u64, data: Vec<u8> },
+    SetXattr { name: Vec<u8>, value: Vec<u8> },
+    RemoveXattr(Vec<u8>),
+    SetOmap(Vec<u8>),
+    RemoveOmap(Vec<u8>),
+    RemoveOmapRange(Vec<u8>),
+    ClearOmap,
+    SetOmapHeader(Vec<u8>),
+    CompareOmap(Vec<u8>),
+    WithFlags { action: Box<Self>, flags: u32 },
 }
 
 /// A bounded, single-use atomic write-operation builder.
@@ -200,6 +279,211 @@ impl WriteOp {
     pub fn assert_version(self, version: u64) -> Result<Self> {
         self.push(WriteAction::AssertVersion(version), 0)
     }
+
+    /// Appends a byte comparison at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error on range, retained-byte, or operation overflow.
+    pub fn compare_extent(self, offset: u64, data: impl AsRef<[u8]>) -> Result<Self> {
+        let data = data.as_ref();
+        offset
+            .checked_add(
+                u64::try_from(data.len()).map_err(|_| Error::invalid("WriteOp::compare_extent"))?,
+            )
+            .ok_or_else(|| Error::invalid("WriteOp::compare_extent"))?;
+        self.push(
+            WriteAction::CompareExtent {
+                offset,
+                data: data.to_vec(),
+            },
+            data.len(),
+        )
+    }
+
+    /// Appends an extended-attribute update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an invalid name or retained-byte or operation overflow.
+    pub fn set_xattr(self, name: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Result<Self> {
+        let name = valid_xattr_name(name.as_ref(), "WriteOp::set_xattr")?;
+        let value = value.as_ref();
+        let retained = name
+            .len()
+            .checked_add(value.len())
+            .ok_or_else(|| Error::invalid("WriteOp::set_xattr"))?;
+        self.push(
+            WriteAction::SetXattr {
+                name,
+                value: value.to_vec(),
+            },
+            retained,
+        )
+    }
+
+    /// Appends an extended-attribute removal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an invalid name or retained-byte or operation overflow.
+    pub fn remove_xattr(self, name: impl AsRef<[u8]>) -> Result<Self> {
+        let name = valid_xattr_name(name.as_ref(), "WriteOp::remove_xattr")?;
+        let retained = name.len();
+        self.push(WriteAction::RemoveXattr(name), retained)
+    }
+
+    /// Appends sorted binary OMAP updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for duplicate keys or retained-byte or operation overflow.
+    pub fn set_omap(self, values: impl IntoIterator<Item = OmapEntry>) -> Result<Self> {
+        let payload = metadata::encode_map(
+            values.into_iter().map(|entry| Entry {
+                key: entry.key,
+                value: entry.value,
+            }),
+            MAX_OPERATION_BYTES,
+        )
+        .map_err(|_| Error::invalid("WriteOp::set_omap"))?;
+        let retained = payload.len();
+        self.push(WriteAction::SetOmap(payload), retained)
+    }
+
+    /// Appends sorted binary OMAP-key removals.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for duplicate keys or retained-byte or operation overflow.
+    pub fn remove_omap(self, keys: impl IntoIterator<Item = Vec<u8>>) -> Result<Self> {
+        let payload = metadata::encode_keys(keys, MAX_OPERATION_BYTES)
+            .map_err(|_| Error::invalid("WriteOp::remove_omap"))?;
+        let retained = payload.len();
+        self.push(WriteAction::RemoveOmap(payload), retained)
+    }
+
+    /// Appends a half-open binary OMAP-key range removal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an empty/reversed range or retained-byte overflow.
+    pub fn remove_omap_range(self, begin: impl AsRef<[u8]>, end: impl AsRef<[u8]>) -> Result<Self> {
+        let payload = metadata::encode_range(begin.as_ref(), end.as_ref(), MAX_OPERATION_BYTES)
+            .map_err(|_| Error::invalid("WriteOp::remove_omap_range"))?;
+        let retained = payload.len();
+        self.push(WriteAction::RemoveOmapRange(payload), retained)
+    }
+
+    /// Appends an OMAP clear.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the operation bound is reached.
+    pub fn clear_omap(self) -> Result<Self> {
+        self.push(WriteAction::ClearOmap, 0)
+    }
+
+    /// Appends an owned OMAP-header update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error on retained-byte or operation overflow.
+    pub fn set_omap_header(self, value: impl AsRef<[u8]>) -> Result<Self> {
+        let value = value.as_ref();
+        self.push(WriteAction::SetOmapHeader(value.to_vec()), value.len())
+    }
+
+    /// Appends an equality comparison for one binary OMAP value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error on retained-byte or operation overflow.
+    pub fn compare_omap(self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Result<Self> {
+        let payload =
+            metadata::encode_compare(key.as_ref(), value.as_ref(), 1, MAX_OPERATION_BYTES)
+                .map_err(|_| Error::invalid("WriteOp::compare_omap"))?;
+        let retained = payload.len();
+        self.push(WriteAction::CompareOmap(payload), retained)
+    }
+
+    /// Applies flags to an existing sub-operation by its zero-based result index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unknown index or unsupported flag.
+    pub fn set_flags(mut self, index: usize, flags: SubOperationFlags) -> Result<Self> {
+        if index >= self.actions.len() || flags.bits() & !OP_FLAG_FAIL_OK != 0 {
+            return Err(Error::invalid("WriteOp::set_flags"));
+        }
+        let action = match self.actions.remove(index) {
+            WriteAction::WithFlags { action, .. } => *action,
+            action => action,
+        };
+        self.actions.insert(
+            index,
+            WriteAction::WithFlags {
+                action: Box::new(action),
+                flags: flags.bits(),
+            },
+        );
+        Ok(self)
+    }
+
+    pub(crate) fn into_operations(self) -> Result<Vec<Operation>> {
+        if self.actions.is_empty() {
+            return Err(Error::invalid("WriteOp"));
+        }
+        Ok(self.actions.into_iter().map(write_operation).collect())
+    }
+}
+
+fn valid_xattr_name(name: &[u8], operation: &'static str) -> Result<Vec<u8>> {
+    if name.is_empty() || name.contains(&0) || name.len() > u32::MAX as usize {
+        return Err(Error::invalid(operation));
+    }
+    Ok(name.to_vec())
+}
+
+fn read_operation(action: ReadAction) -> Operation {
+    match action {
+        ReadAction::Read { offset, length } => Operation::Read { offset, length },
+        ReadAction::Stat | ReadAction::AssertExists => Operation::Stat,
+        ReadAction::AssertVersion(version) => Operation::AssertVersion(version),
+        ReadAction::GetXattr(name) => Operation::GetXattr(name),
+        ReadAction::GetOmapHeader => Operation::OmapGetHeader,
+        ReadAction::ListOmap(payload) => Operation::OmapGetValues(payload),
+        ReadAction::WithFlags { action, flags } => Operation::WithFlags {
+            operation: Box::new(read_operation(*action)),
+            flags,
+        },
+    }
+}
+
+fn write_operation(action: WriteAction) -> Operation {
+    match action {
+        WriteAction::Create { exclusive } => Operation::Create { exclusive },
+        WriteAction::Write { offset, data } => Operation::Write { offset, data },
+        WriteAction::WriteFull(data) => Operation::WriteFull(data),
+        WriteAction::Append(data) => Operation::Append(data),
+        WriteAction::Truncate(size) => Operation::Truncate { size },
+        WriteAction::Zero { offset, length } => Operation::Zero { offset, length },
+        WriteAction::Remove => Operation::Remove,
+        WriteAction::AssertVersion(version) => Operation::AssertVersion(version),
+        WriteAction::CompareExtent { offset, data } => Operation::CompareExtent { offset, data },
+        WriteAction::SetXattr { name, value } => Operation::SetXattr { name, value },
+        WriteAction::RemoveXattr(name) => Operation::RemoveXattr(name),
+        WriteAction::SetOmap(payload) => Operation::OmapSetValues(payload),
+        WriteAction::RemoveOmap(payload) => Operation::OmapRemoveKeys(payload),
+        WriteAction::RemoveOmapRange(payload) => Operation::OmapRemoveRange(payload),
+        WriteAction::ClearOmap => Operation::OmapClear,
+        WriteAction::SetOmapHeader(value) => Operation::OmapSetHeader(value),
+        WriteAction::CompareOmap(payload) => Operation::OmapCompare(payload),
+        WriteAction::WithFlags { action, flags } => Operation::WithFlags {
+            operation: Box::new(write_operation(*action)),
+            flags,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -217,5 +501,67 @@ mod tests {
         ));
         assert!(WriteOp::new().write(u64::MAX, [0, 1]).is_err());
         assert!(ReadOp::new().read(u64::MAX, 1).is_err());
+    }
+
+    #[test]
+    fn metadata_builders_sort_copy_validate_and_preserve_create_flags() {
+        let operation = WriteOp::new()
+            .create(true)
+            .expect("create")
+            .set_flags(0, SubOperationFlags::FAIL_OK)
+            .expect("flags")
+            .set_omap([
+                OmapEntry {
+                    key: b"b".to_vec(),
+                    value: b"2".to_vec(),
+                },
+                OmapEntry {
+                    key: b"a".to_vec(),
+                    value: b"1".to_vec(),
+                },
+            ])
+            .expect("omap")
+            .into_operations()
+            .expect("operations");
+        assert!(matches!(
+            &operation[0],
+            Operation::WithFlags { operation, flags }
+                if **operation == Operation::Create { exclusive: true }
+                    && *flags == OP_FLAG_FAIL_OK
+        ));
+        assert!(
+            matches!(&operation[1], Operation::OmapSetValues(data) if &data[4..9] == b"\x01\0\0\0a")
+        );
+        assert!(WriteOp::new().set_xattr([], []).is_err());
+        assert!(WriteOp::new().remove_omap_range(b"z", b"a").is_err());
+    }
+
+    #[test]
+    fn builders_enforce_the_certified_operation_limit() {
+        let mut operation = ReadOp::new();
+        for _ in 0..MAX_SUB_OPERATIONS {
+            operation = operation.stat().expect("within bound");
+        }
+        assert!(operation.stat().is_err());
+        assert!(ReadOp::new().into_operations().is_err());
+        assert!(WriteOp::new().into_operations().is_err());
+    }
+
+    #[test]
+    fn setting_flags_replaces_the_existing_wrapper() {
+        let operations = WriteOp::new()
+            .create(true)
+            .expect("create")
+            .set_flags(0, SubOperationFlags::FAIL_OK)
+            .expect("set")
+            .set_flags(0, SubOperationFlags::empty())
+            .expect("replace")
+            .into_operations()
+            .expect("operations");
+        assert!(matches!(
+            operations.as_slice(),
+            [Operation::WithFlags { operation, flags }]
+                if **operation == Operation::Create { exclusive: true } && *flags == 0
+        ));
     }
 }

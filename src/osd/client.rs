@@ -24,8 +24,9 @@ use super::backoff::{
     encode_acknowledgment,
 };
 use super::messages::{
-    FLAG_IGNORE_CACHE, FLAG_IGNORE_OVERLAY, FLAG_ON_DISK, FLAG_REDIRECTED, FLAG_RETRY, Limits,
-    Operation, Reply, Request, decode_reply, encode_request,
+    FLAG_IGNORE_CACHE, FLAG_IGNORE_OVERLAY, FLAG_ON_DISK, FLAG_PG_OP, FLAG_REDIRECTED, FLAG_RETRY,
+    FLAG_RETURN_VECTOR, Limits, OP_FLAG_FAIL_OK, Operation, OperationResult, Reply, Request,
+    decode_reply, encode_request,
 };
 
 const ENTITY_OSD: u8 = 4;
@@ -53,6 +54,12 @@ pub(crate) struct ReadResult {
 }
 
 pub(crate) type MutationResult = ReadResult;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CompoundResult {
+    pub(crate) operations: Vec<OperationResult>,
+    pub(crate) version: u64,
+}
 
 pub(crate) enum Mutation<'a> {
     Create { exclusive: bool },
@@ -188,7 +195,7 @@ impl Client {
             frame_limits,
             message_limits: Limits {
                 max_bytes: u32::try_from(frame_limits.max_frame_bytes).unwrap_or(u32::MAX),
-                max_operations: 4,
+                max_operations: 16,
             },
             dial_timeout,
             handshake_timeout,
@@ -227,6 +234,52 @@ impl Client {
             .await
     }
 
+    pub(crate) async fn pgnls(
+        &self,
+        monitor: &MonitorClient,
+        pool_id: i64,
+        namespace: Vec<u8>,
+        cursor: &HObject,
+        count: u64,
+        options: &OperationOptions,
+    ) -> Result<super::enumeration::ListPage, Error> {
+        let state = monitor.snapshot();
+        let map = state.osdmap().ok_or(Error::NotConnected)?;
+        let operation = super::enumeration::encode_operation(
+            cursor,
+            count,
+            map.epoch(),
+            self.message_limits.max_bytes as usize,
+        )
+        .map_err(|error| map_message_error(error.into()))?;
+        let result = self
+            .execute_operations(
+                monitor,
+                Target {
+                    pool_id,
+                    object: Vec::new(),
+                    locator: Vec::new(),
+                    namespace,
+                    snapshot: super::messages::NO_SNAP,
+                },
+                vec![operation],
+                options,
+            )
+            .await?;
+        let data = result
+            .operations
+            .into_iter()
+            .next()
+            .ok_or(Error::MalformedReply)?
+            .data;
+        super::enumeration::decode_page(
+            &data,
+            self.message_limits.max_bytes as usize,
+            self.message_limits.max_bytes as usize / 12,
+        )
+        .map_err(|error| map_message_error(error.into()))
+    }
+
     pub(crate) async fn mutate(
         self: &Arc<Self>,
         monitor: Arc<MonitorClient>,
@@ -234,15 +287,43 @@ impl Client {
         mutation: Mutation<'_>,
         options: OperationOptions,
     ) -> Result<MutationResult, Error> {
-        if target.snapshot != super::messages::NO_SNAP {
+        let result = self
+            .mutate_operations(monitor, target, vec![mutation.into_owned()], options)
+            .await?;
+        let operation = result
+            .operations
+            .into_iter()
+            .next()
+            .ok_or(Error::MalformedReply)?;
+        Ok(ReadResult {
+            data: operation.data,
+            version: result.version,
+        })
+    }
+
+    pub(crate) async fn mutate_operations(
+        self: &Arc<Self>,
+        monitor: Arc<MonitorClient>,
+        target: Target,
+        operations: Vec<Operation>,
+        options: OperationOptions,
+    ) -> Result<CompoundResult, Error> {
+        if target.snapshot != super::messages::NO_SNAP
+            || operations.is_empty()
+            || operations.len() > self.message_limits.max_operations as usize
+            || !contains_mutation(&operations)
+        {
             return Err(Error::LimitExceeded);
         }
-        let retained = mutation.retained_bytes()?;
+        let retained = operations.iter().try_fold(0_u64, |total, operation| {
+            total
+                .checked_add(u64::try_from(operation.data_len()).map_err(|_| Error::LimitExceeded)?)
+                .ok_or(Error::LimitExceeded)
+        })?;
         if retained > u64::from(self.message_limits.max_bytes) {
             return Err(Error::LimitExceeded);
         }
         let (sequence, transaction_id) = self.admit_mutation(retained, &options).await?;
-        let operation = mutation.into_owned();
         let (result_tx, result_rx) = oneshot::channel();
         let client = Arc::clone(self);
         tokio::spawn(async move {
@@ -251,7 +332,7 @@ impl Client {
                 sequence: Some(sequence),
             };
             let result = client
-                .execute_mutation(&monitor, target, operation, transaction_id, &options)
+                .execute_mutation(&monitor, target, operations, transaction_id, &options)
                 .await;
             completion.finish(result.as_ref().err());
             let _ = result_tx.send(result);
@@ -392,11 +473,35 @@ impl Client {
         operation: Operation,
         options: &OperationOptions,
     ) -> Result<ReadResult, Error> {
+        let result = self
+            .execute_operations(monitor, target, vec![operation], options)
+            .await?;
+        let operation = result
+            .operations
+            .into_iter()
+            .next()
+            .ok_or(Error::MalformedReply)?;
+        Ok(ReadResult {
+            data: operation.data,
+            version: result.version,
+        })
+    }
+
+    pub(crate) async fn execute_operations(
+        &self,
+        monitor: &MonitorClient,
+        target: Target,
+        operations: Vec<Operation>,
+        options: &OperationOptions,
+    ) -> Result<CompoundResult, Error> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Error::Closed);
         }
+        if operations.is_empty() || operations.len() > self.message_limits.max_operations as usize {
+            return Err(Error::LimitExceeded);
+        }
         let transaction_id = self.take_transaction_id()?;
-        self.execute_routed(monitor, target, operation, transaction_id, false, options)
+        self.execute_routed(monitor, target, operations, transaction_id, false, options)
             .await
     }
 
@@ -404,11 +509,11 @@ impl Client {
         &self,
         monitor: &MonitorClient,
         target: Target,
-        operation: Operation,
+        operations: Vec<Operation>,
         transaction_id: u64,
         options: &OperationOptions,
-    ) -> Result<MutationResult, Error> {
-        self.execute_routed(monitor, target, operation, transaction_id, true, options)
+    ) -> Result<CompoundResult, Error> {
+        self.execute_routed(monitor, target, operations, transaction_id, true, options)
             .await
     }
 
@@ -417,13 +522,28 @@ impl Client {
         &self,
         monitor: &MonitorClient,
         mut target: Target,
-        operation: Operation,
+        operations: Vec<Operation>,
         mut transaction_id: u64,
         mutation: bool,
         options: &OperationOptions,
-    ) -> Result<ReadResult, Error> {
+    ) -> Result<CompoundResult, Error> {
         let client_incarnation = self.client_incarnation()?;
-        let mut flags = 0;
+        let route_hash = operations.first().and_then(Operation::route_hash);
+        if operations
+            .iter()
+            .skip(1)
+            .any(|operation| operation.route_hash() != route_hash)
+        {
+            return Err(Error::LimitExceeded);
+        }
+        let mut flags = if route_hash.is_some() {
+            FLAG_PG_OP | FLAG_IGNORE_OVERLAY
+        } else {
+            0
+        };
+        if operations.len() > 1 {
+            flags |= FLAG_RETURN_VECTOR;
+        }
         let mut prior_unknown = None;
         for attempt in 0..MAX_ATTEMPTS {
             if self.closed.load(Ordering::Acquire) {
@@ -434,12 +554,17 @@ impl Client {
             let map = state
                 .osdmap()
                 .ok_or_else(|| preserve_unknown(Error::NotConnected, prior_unknown))?;
-            let placement = map
-                .place_object(
-                    target.pool_id,
-                    &target.object,
-                    &target.locator,
-                    &target.namespace,
+            let placement = route_hash
+                .map_or_else(
+                    || {
+                        map.place_object(
+                            target.pool_id,
+                            &target.object,
+                            &target.locator,
+                            &target.namespace,
+                        )
+                    },
+                    |hash| map.place_raw_hash(target.pool_id, hash),
                 )
                 .map_err(|_| preserve_unknown(Error::NoPrimary, prior_unknown))?;
             if placement.acting_primary < 0 {
@@ -458,7 +583,6 @@ impl Client {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
                 .map_or(0, |authority| authority.metadata().global_id);
-            let operations = std::slice::from_ref(&operation);
             let message = encode_request(
                 &Request {
                     map_epoch: map.epoch(),
@@ -477,7 +601,7 @@ impl Client {
                     retry: i32::try_from(attempt).map_err(|_| Error::LimitExceeded)?,
                     flags,
                     features: GlobalFeatures::OSD_CLIENT.0,
-                    operations,
+                    operations: &operations,
                 },
                 self.message_limits,
             )
@@ -486,7 +610,7 @@ impl Client {
                 key: target.locator.clone(),
                 object: target.object.clone(),
                 snapshot: target.snapshot,
-                hash: placement.raw_hash,
+                hash: route_hash.unwrap_or(placement.raw_hash),
                 max: false,
                 namespace: target.namespace.clone(),
                 pool: target.pool_id,
@@ -573,7 +697,7 @@ impl Client {
                 }
                 continue;
             }
-            if validate_operation(&reply, &operation).is_err() {
+            if validate_operations(&reply, &operations).is_err() {
                 self.invalidate(placement.acting_primary, &session);
                 return Err(if mutation {
                     Error::OutcomeUnknown(UnknownCause::Transport)
@@ -581,8 +705,11 @@ impl Client {
                     Error::MalformedReply
                 });
             }
-            let operation_reply = &reply.operations[0];
-            if operation_reply.code == -11 {
+            if reply
+                .operations
+                .iter()
+                .any(|operation| operation.code == -11)
+            {
                 refresh_map(monitor, map.epoch(), options).await?;
                 if mutation {
                     transaction_id = self.take_transaction_id()?;
@@ -596,11 +723,13 @@ impl Client {
             if reply.result < 0 {
                 return Err(Error::WireErrno(reply.result));
             }
-            if operation_reply.code < 0 {
-                return Err(Error::WireErrno(operation_reply.code));
+            for (operation, operation_reply) in operations.iter().zip(&reply.operations) {
+                if operation_reply.code < 0 && operation.flags() & OP_FLAG_FAIL_OK == 0 {
+                    return Err(Error::WireErrno(operation_reply.code));
+                }
             }
-            return Ok(ReadResult {
-                data: operation_reply.data.clone(),
+            return Ok(CompoundResult {
+                operations: reply.operations,
                 version: reply.version,
             });
         }
@@ -1214,14 +1343,23 @@ fn validate_target(reply: &Reply, object: &[u8], pg: PG, attempt: usize) -> Resu
     Ok(())
 }
 
-fn validate_operation(reply: &Reply, operation: &Operation) -> Result<(), Error> {
-    if reply.operations.len() != 1 || reply.operations[0].operation != operation.code() {
+fn contains_mutation(operations: &[Operation]) -> bool {
+    operations.iter().any(Operation::is_mutation)
+}
+
+fn validate_operations(reply: &Reply, operations: &[Operation]) -> Result<(), Error> {
+    if reply.operations.len() != operations.len() {
         return Err(Error::MalformedReply);
     }
-    if let Operation::Read { length, .. } = operation
-        && reply.operations[0].data.len() as u64 > *length
-    {
-        return Err(Error::MalformedReply);
+    for (reply, operation) in reply.operations.iter().zip(operations) {
+        if reply.operation != operation.code() {
+            return Err(Error::MalformedReply);
+        }
+        if let Operation::Read { length, .. } = operation
+            && reply.data.len() as u64 > *length
+        {
+            return Err(Error::MalformedReply);
+        }
     }
     Ok(())
 }
@@ -1520,7 +1658,7 @@ mod tests {
         };
         assert!(validate_target(&reply, b"blocked", pg, 0).is_ok());
         assert_eq!(
-            validate_operation(&reply, &operation),
+            validate_operations(&reply, std::slice::from_ref(&operation)),
             Err(Error::MalformedReply)
         );
 
@@ -1533,9 +1671,25 @@ mod tests {
         });
         assert!(validate_target(&reply, b"blocked", pg, 0).is_ok());
         assert_eq!(
-            validate_operation(&reply, &operation),
+            validate_operations(&reply, std::slice::from_ref(&operation)),
             Err(Error::MalformedReply)
         );
+    }
+
+    #[test]
+    fn comparisons_alone_are_not_a_mutation_compound() {
+        assert!(!contains_mutation(&[
+            Operation::AssertVersion(7),
+            Operation::CompareExtent {
+                offset: 0,
+                data: b"value".to_vec()
+            },
+            Operation::OmapCompare(vec![1, 2, 3]),
+        ]));
+        assert!(contains_mutation(&[
+            Operation::AssertVersion(7),
+            Operation::WriteFull(Vec::new()),
+        ]));
     }
 
     fn request_message() -> Message {

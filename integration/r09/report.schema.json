@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "started_at", "finished_at", "schema_sha256", "rust", "go", "native", "server", "cluster", "probes", "scenarios"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite_id": { "const": "r09/metadata-compound-enumeration-v1" },
+    "status": { "const": "passed" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "schema_sha256": { "$ref": "#/$defs/sha256" },
+    "rust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/git" }, "tree": { "$ref": "#/$defs/git" }, "source_sha256": { "$ref": "#/$defs/sha256" },
+        "compiler_image": { "const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922" },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] }, "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "go": {
+      "type": "object", "additionalProperties": false, "required": ["revision", "tree", "compiler", "platform", "binary_sha256"],
+      "properties": {
+        "revision": { "const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4" }, "tree": { "const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7" },
+        "compiler": { "const": "go1.26.8" }, "platform": { "enum": ["linux/amd64", "linux/arm64"] }, "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "native": {
+      "type": "object", "additionalProperties": false, "required": ["version", "binary_sha256", "rust_seed", "rust_verify", "go_seed", "go_verify"],
+      "properties": {
+        "version": { "const": "librados2-20.2.4-0.el9" }, "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "rust_seed": { "$ref": "#/$defs/native_seed" }, "go_seed": { "$ref": "#/$defs/native_seed" },
+        "rust_verify": { "$ref": "#/$defs/native_verify" }, "go_verify": { "$ref": "#/$defs/native_verify" }
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false, "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": { "const": "7f793731f1b39eb4f465e960113d2363c311b964" },
+        "version": { "const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)" },
+        "image": { "const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cluster": {
+      "type": "object", "additionalProperties": false, "required": ["fsid", "osds", "pool", "replicas", "initial_pgs", "final_pgs"],
+      "properties": { "fsid": { "const": "11111111-2222-4333-8444-888888888888" }, "osds": { "const": 3 }, "pool": { "const": "p08-data" }, "replicas": { "const": 2 }, "initial_pgs": { "const": 16 }, "final_pgs": { "const": 32 } }
+    },
+    "probes": {
+      "type": "object", "additionalProperties": false, "required": ["rust", "go"],
+      "properties": { "rust": { "$ref": "#/$defs/probe" }, "go": { "$ref": "#/$defs/probe" } }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["native_metadata", "binary_metadata", "omap_pagination", "compound_read", "compound_atomicity", "cross_client_contention", "enumeration", "namespaces", "cursor_continuation", "cursor_partitioning"],
+      "properties": {
+        "native_metadata": { "const": "passed" }, "binary_metadata": { "const": "passed" }, "omap_pagination": { "const": "passed" }, "compound_read": { "const": "passed" }, "compound_atomicity": { "const": "passed" }, "cross_client_contention": { "const": "passed" }, "enumeration": { "const": "passed" }, "namespaces": { "const": "passed" }, "cursor_continuation": { "const": "passed" }, "cursor_partitioning": { "const": "passed" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["native_metadata", "binary_metadata", "omap_pagination", "compound_read", "compound_atomicity", "cross_client_contention", "enumeration", "namespaces", "cursor_continuation", "cursor_partitioning"],
+      "properties": { "native_metadata": { "const": true }, "binary_metadata": { "const": true }, "omap_pagination": { "const": true }, "compound_read": { "const": true }, "compound_atomicity": { "const": true }, "cross_client_contention": { "const": true }, "enumeration": { "const": true }, "namespaces": { "const": true }, "cursor_continuation": { "const": true }, "cursor_partitioning": { "const": true } }
+    },
+    "native_seed": { "type": "object", "additionalProperties": false, "required": ["native_binary_metadata", "native_compound_seed"], "properties": { "native_binary_metadata": { "const": true }, "native_compound_seed": { "const": true } } },
+    "native_verify": { "type": "object", "additionalProperties": false, "required": ["go_binary_metadata", "go_omap_native_read", "go_enumeration_native_read", "namespace_filtering"], "properties": { "go_binary_metadata": { "const": true }, "go_omap_native_read": { "const": true }, "go_enumeration_native_read": { "const": true }, "namespace_filtering": { "const": true } } }
+  }
+}

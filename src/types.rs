@@ -150,6 +150,10 @@ impl SubOperationFlags {
     pub const fn contains(self, mask: Self) -> bool {
         self.0 & mask.0 == mask.0
     }
+
+    pub(crate) const fn bits(self) -> u32 {
+        self.0
+    }
 }
 
 /// One owned extended attribute.

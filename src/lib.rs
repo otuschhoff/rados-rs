@@ -32,9 +32,12 @@ pub mod r07_integration;
 #[cfg(all(feature = "r08-integration", not(rados_packaged_source)))]
 #[doc(hidden)]
 pub mod r08_integration;
+#[cfg(all(feature = "r09-integration", not(rados_packaged_source)))]
+#[doc(hidden)]
+pub mod r09_integration;
 mod types;
 
-pub use client::{Client, ObjectRef, Pool};
+pub use client::{Client, ObjectRef, Pool, compare_object_cursors};
 pub use config::{Config, SecretKey, SecurityMode};
 pub use error::{Error, ErrorKind, Result};
 pub use identity::{LocatorKey, Namespace, ObjectName};

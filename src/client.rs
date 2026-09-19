@@ -9,13 +9,19 @@ use crate::mon::seeds::{SeedError, SeedLimits, resolve_seeds};
 use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::session::{Config as SessionConfig, ReconnectPolicy, SessionError};
-use crate::osd::{Client as OSDClient, ClientError, NO_SNAP, OSDMutation, Target as OSDTarget};
+use crate::osd::metadata;
+use crate::osd::{
+    Client as OSDClient, ClientError, CompoundResult, HObject, NO_SNAP, OSDMutation,
+    Operation as OSDOperation, Target as OSDTarget, compare_hobject,
+};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectInfo, ObjectName, OpResult,
-    OperationOptions, Result, SecurityMode,
+    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectEntry, ObjectInfo, ObjectName,
+    ObjectPage, OmapEntry, OpResult, OperationOptions, Page, ReadOp, Result, SecurityMode,
+    SubOperationResult, WriteOp, Xattr,
 };
+use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -652,6 +658,350 @@ impl Pool {
     pub const fn client(&self) -> &Client {
         &self.client
     }
+
+    /// Returns the first object-enumeration cursor for this pool view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unresolved pool.
+    pub fn begin_object_cursor(&self) -> Result<crate::ObjectCursor> {
+        let pool_id = self
+            .id
+            .ok_or_else(|| Error::invalid("Pool::begin_object_cursor"))?;
+        new_object_cursor(
+            pool_id,
+            self.namespace.as_bytes(),
+            &HObject {
+                key: Vec::new(),
+                object: Vec::new(),
+                snapshot: 0,
+                hash: 0,
+                max: false,
+                namespace: Vec::new(),
+                pool: i64::MIN,
+            },
+        )
+    }
+
+    /// Returns the terminal object-enumeration cursor for this pool view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unresolved pool.
+    pub fn end_object_cursor(&self) -> Result<crate::ObjectCursor> {
+        let pool_id = self
+            .id
+            .ok_or_else(|| Error::invalid("Pool::end_object_cursor"))?;
+        Ok(crate::ObjectCursor {
+            pool_id,
+            namespace: self.namespace.as_bytes().to_vec(),
+            value: Vec::new(),
+            end: true,
+        })
+    }
+
+    /// Splits a cursor interval into near-equal reversed-hash partitions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for foreign, reversed, or excessive partitions.
+    pub fn split_cursor(
+        &self,
+        begin: &crate::ObjectCursor,
+        end: &crate::ObjectCursor,
+        partitions: u32,
+    ) -> Result<Vec<crate::ObjectCursor>> {
+        const MAX_PARTITIONS: u32 = 1 << 20;
+        let pool_id = self
+            .id
+            .ok_or_else(|| Error::invalid("Pool::split_cursor"))?;
+        if partitions == 0
+            || partitions > MAX_PARTITIONS
+            || !self.owns_cursor(begin)
+            || !self.owns_cursor(end)
+            || compare_object_cursors(begin, end)? == CmpOrdering::Greater
+        {
+            return Err(Error::invalid("Pool::split_cursor"));
+        }
+        if begin.is_end() {
+            return Ok(vec![begin.clone(); partitions as usize + 1]);
+        }
+        let start = cursor_hobject(begin)?;
+        let finish = cursor_hobject(end)?;
+        let start_hash = u64::from(start.hash.reverse_bits());
+        let finish_hash = if finish.max {
+            1_u64 << 32
+        } else {
+            u64::from(finish.hash.reverse_bits())
+        };
+        let difference = finish_hash - start_hash;
+        let mut boundaries = Vec::with_capacity(partitions as usize + 1);
+        boundaries.push(begin.clone());
+        for index in 1..partitions {
+            let index = u64::from(index);
+            let partition_count = u64::from(partitions);
+            let reversed = start_hash
+                + difference / partition_count * index
+                + difference % partition_count * index / partition_count;
+            if reversed >= 1_u64 << 32 {
+                boundaries.push(self.end_object_cursor()?);
+            } else {
+                boundaries.push(new_object_cursor(
+                    pool_id,
+                    self.namespace.as_bytes(),
+                    &HObject {
+                        key: Vec::new(),
+                        object: Vec::new(),
+                        snapshot: NO_SNAP,
+                        hash: u32::try_from(reversed)
+                            .map_err(|_| Error::invalid("Pool::split_cursor"))?
+                            .reverse_bits(),
+                        max: false,
+                        namespace: Vec::new(),
+                        pool: pool_id,
+                    },
+                )?);
+            }
+        }
+        boundaries.push(end.clone());
+        Ok(boundaries)
+    }
+
+    /// Lists a bounded page of objects after `after`.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn list_objects(
+        &self,
+        after: &crate::ObjectCursor,
+        limit: u64,
+        options: OperationOptions,
+    ) -> Result<ObjectPage> {
+        let end = self.end_object_cursor()?;
+        self.list_objects_range(after, &end, limit, options).await
+    }
+
+    /// Lists a bounded page of objects in the half-open cursor interval.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn list_objects_range(
+        &self,
+        after: &crate::ObjectCursor,
+        end: &crate::ObjectCursor,
+        limit: u64,
+        options: OperationOptions,
+    ) -> Result<ObjectPage> {
+        let operation = "Pool::list_objects_range";
+        let pool_id = self.id.ok_or_else(|| Error::invalid(operation))?;
+        let max_entries = FRAME_LIMITS.max_frame_bytes / 12;
+        if limit == 0
+            || limit > max_entries
+            || !self.owns_cursor(after)
+            || !self.owns_cursor(end)
+            || compare_object_cursors(after, end)? == CmpOrdering::Greater
+        {
+            return Err(Error::invalid(operation));
+        }
+        let options =
+            bounded_options(options, self.client.0.config.operation_timeout(), operation)?;
+        self.client.ready(operation, &options)?;
+        let monitor = self.client.connected_monitor(operation)?;
+        let finish = cursor_hobject(end)?;
+        let mut next = cursor_hobject(after)?;
+        let mut values = Vec::with_capacity(usize::try_from(limit).unwrap_or_default());
+        while values.len() < usize::try_from(limit).unwrap_or(usize::MAX)
+            && compare_hobject(&next, &finish) == CmpOrdering::Less
+        {
+            let remaining =
+                limit - u64::try_from(values.len()).map_err(|_| Error::invalid(operation))?;
+            let page = self
+                .client
+                .0
+                .objecter
+                .pgnls(
+                    &monitor,
+                    pool_id,
+                    self.namespace.as_bytes().to_vec(),
+                    &next,
+                    remaining,
+                    &options,
+                )
+                .await
+                .map_err(|error| map_osd_error(error, operation))?;
+            let map = monitor
+                .snapshot()
+                .osdmap()
+                .ok_or_else(|| Error::not_connected(operation))?;
+            let mut entry_cursors = Vec::with_capacity(page.entries.len());
+            for entry in &page.entries {
+                if self.namespace.as_bytes() != b"\x01"
+                    && entry.namespace != self.namespace.as_bytes()
+                {
+                    return Err(Error::not_connected(operation));
+                }
+                let placement = map
+                    .map_object(pool_id, &entry.object, &entry.locator, &entry.namespace)
+                    .map_err(|_| Error::not_connected(operation))?;
+                entry_cursors.push(HObject {
+                    key: entry.locator.clone(),
+                    object: entry.object.clone(),
+                    snapshot: NO_SNAP,
+                    hash: placement.raw_hash,
+                    max: false,
+                    namespace: entry.namespace.clone(),
+                    pool: pool_id,
+                });
+            }
+            validate_enumeration_page(pool_id, &next, &page.next, &entry_cursors)
+                .map_err(|_| Error::not_connected(operation))?;
+
+            let available = usize::try_from(
+                limit - u64::try_from(values.len()).map_err(|_| Error::invalid(operation))?,
+            )
+            .map_err(|_| Error::invalid(operation))?;
+            let (page_next, entry_count) = clip_enumeration_page(
+                page.next,
+                page.entries.len(),
+                &entry_cursors,
+                &finish,
+                available,
+            );
+            values.extend(
+                page.entries
+                    .into_iter()
+                    .take(entry_count)
+                    .map(|entry| ObjectEntry {
+                        name: entry.object,
+                        namespace: entry.namespace,
+                        locator: entry.locator,
+                    }),
+            );
+            next = page_next;
+        }
+        let next_cursor = if next.max {
+            self.end_object_cursor()?
+        } else {
+            new_object_cursor(pool_id, self.namespace.as_bytes(), &next)?
+        };
+        let more = compare_hobject(&next, &finish) == CmpOrdering::Less;
+        Ok(ObjectPage {
+            values,
+            next: next_cursor,
+            more,
+        })
+    }
+
+    fn owns_cursor(&self, cursor: &crate::ObjectCursor) -> bool {
+        self.id == Some(cursor.pool_id) && self.namespace.as_bytes() == cursor.namespace
+    }
+}
+
+fn validate_enumeration_page(
+    pool_id: i64,
+    start: &HObject,
+    next: &HObject,
+    entries: &[HObject],
+) -> Result<()> {
+    if !next.max && (next.pool == i64::MIN || next.snapshot != NO_SNAP || next.pool != pool_id) {
+        return Err(Error::not_connected("Pool::list_objects_range"));
+    }
+    let mut previous = start;
+    for entry in entries {
+        if compare_hobject(entry, previous) == CmpOrdering::Less
+            || (!next.max && compare_hobject(entry, next) != CmpOrdering::Less)
+        {
+            return Err(Error::not_connected("Pool::list_objects_range"));
+        }
+        previous = entry;
+    }
+    if !next.max && compare_hobject(next, start) != CmpOrdering::Greater {
+        return Err(Error::not_connected("Pool::list_objects_range"));
+    }
+    Ok(())
+}
+
+fn clip_enumeration_page(
+    mut next: HObject,
+    mut entry_count: usize,
+    entry_cursors: &[HObject],
+    finish: &HObject,
+    available: usize,
+) -> (HObject, usize) {
+    if compare_hobject(&next, finish) == CmpOrdering::Greater {
+        next = finish.clone();
+        while entry_count > 0
+            && compare_hobject(&entry_cursors[entry_count - 1], finish) != CmpOrdering::Less
+        {
+            entry_count -= 1;
+        }
+    }
+    if entry_count > available {
+        next = entry_cursors[available].clone();
+        entry_count = available;
+    }
+    (next, entry_count)
+}
+
+/// Compares two opaque cursors from the same pool and namespace.
+///
+/// # Errors
+///
+/// Returns an invalid-argument error for malformed or unrelated cursors.
+pub fn compare_object_cursors(
+    left: &crate::ObjectCursor,
+    right: &crate::ObjectCursor,
+) -> Result<CmpOrdering> {
+    if left.pool_id != right.pool_id || left.namespace != right.namespace {
+        return Err(Error::invalid("compare_object_cursors"));
+    }
+    match (left.end, right.end) {
+        (true, true) => Ok(CmpOrdering::Equal),
+        (true, false) => Ok(CmpOrdering::Greater),
+        (false, true) => Ok(CmpOrdering::Less),
+        (false, false) => Ok(compare_hobject(
+            &cursor_hobject(left)?,
+            &cursor_hobject(right)?,
+        )),
+    }
+}
+
+fn cursor_hobject(cursor: &crate::ObjectCursor) -> Result<HObject> {
+    if cursor.end {
+        return Ok(HObject {
+            key: Vec::new(),
+            object: Vec::new(),
+            snapshot: 0,
+            hash: 0,
+            max: true,
+            namespace: Vec::new(),
+            pool: 0,
+        });
+    }
+    let object = crate::osd::enumeration::unmarshal_cursor(&cursor.value)
+        .map_err(|_| Error::invalid("ObjectCursor"))?;
+    let minimum =
+        object.snapshot == 0 && object.hash == 0 && !object.max && object.pool == i64::MIN;
+    if object.max || (!minimum && (object.pool != cursor.pool_id || object.snapshot != NO_SNAP)) {
+        return Err(Error::invalid("ObjectCursor"));
+    }
+    Ok(object)
+}
+
+fn new_object_cursor(
+    pool_id: i64,
+    namespace: &[u8],
+    object: &HObject,
+) -> Result<crate::ObjectCursor> {
+    Ok(crate::ObjectCursor {
+        pool_id,
+        namespace: namespace.to_vec(),
+        value: crate::osd::enumeration::marshal_cursor(object)
+            .map_err(|_| Error::invalid("ObjectCursor"))?,
+        end: false,
+    })
 }
 
 fn parse_fsid(value: &str) -> Result<Fsid> {
@@ -1037,6 +1387,279 @@ impl ObjectRef {
             .await
     }
 
+    /// Reads one extended attribute by its binary name.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn get_xattr(
+        &self,
+        name: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<Vec<u8>> {
+        let result = self
+            .execute_read_named(
+                ReadOp::new().get_xattr(name)?,
+                options,
+                "ObjectRef::get_xattr",
+            )
+            .await?;
+        Ok(result
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_connected("ObjectRef::get_xattr"))?
+            .data)
+    }
+
+    /// Sets one extended attribute with a binary name and value.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn set_xattr(
+        &self,
+        name: impl AsRef<[u8]>,
+        value: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.execute_write(WriteOp::new().set_xattr(name, value)?, options)
+            .await
+    }
+
+    /// Removes one extended attribute by its binary name.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn remove_xattr(
+        &self,
+        name: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.execute_write(WriteOp::new().remove_xattr(name)?, options)
+            .await
+    }
+
+    /// Lists all extended attributes in bytewise name order.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable routing, transport, deadline, cancellation, bounds, or Ceph errors.
+    pub async fn list_xattrs(&self, options: OperationOptions) -> Result<Vec<Xattr>> {
+        let result = self
+            .execute_read_operations(
+                vec![OSDOperation::GetXattrs],
+                options,
+                "ObjectRef::list_xattrs",
+            )
+            .await?;
+        let data = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected("ObjectRef::list_xattrs"))?
+            .data
+            .as_slice();
+        metadata::decode_map(data, data.len().max(1), data.len() / 8 + 1)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| Xattr {
+                        name: entry.key,
+                        value: entry.value,
+                    })
+                    .collect()
+            })
+            .map_err(|_| Error::not_connected("ObjectRef::list_xattrs"))
+    }
+
+    /// Lists a bounded page of OMAP entries after a binary key.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn list_omap(
+        &self,
+        after: impl AsRef<[u8]>,
+        limit: u64,
+        options: OperationOptions,
+    ) -> Result<Page<OmapEntry>> {
+        let result = self
+            .execute_read_named(
+                ReadOp::new().list_omap(after, limit)?,
+                options,
+                "ObjectRef::list_omap",
+            )
+            .await?;
+        let data = result
+            .results
+            .first()
+            .ok_or_else(|| Error::not_connected("ObjectRef::list_omap"))?
+            .data
+            .as_slice();
+        let maximum = usize::try_from(limit).unwrap_or(usize::MAX);
+        let (entries, more) = metadata::decode_page(data, data.len().max(1), maximum)
+            .map_err(|_| Error::not_connected("ObjectRef::list_omap"))?;
+        Ok(Page {
+            values: entries
+                .into_iter()
+                .map(|entry| OmapEntry {
+                    key: entry.key,
+                    value: entry.value,
+                })
+                .collect(),
+            more,
+        })
+    }
+
+    /// Reads the OMAP header.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn get_omap_header(&self, options: OperationOptions) -> Result<Vec<u8>> {
+        let result = self
+            .execute_read_named(
+                ReadOp::new().get_omap_header()?,
+                options,
+                "ObjectRef::get_omap_header",
+            )
+            .await?;
+        Ok(result
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_connected("ObjectRef::get_omap_header"))?
+            .data)
+    }
+
+    /// Reads selected binary OMAP keys in bytewise order.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn get_omap(
+        &self,
+        keys: impl IntoIterator<Item = Vec<u8>>,
+        options: OperationOptions,
+    ) -> Result<Vec<OmapEntry>> {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        let maximum = keys.len();
+        let max_bytes = usize::try_from(FRAME_LIMITS.max_frame_bytes)
+            .map_err(|_| Error::invalid("ObjectRef::get_omap"))?;
+        let payload = metadata::encode_keys(keys, max_bytes)
+            .map_err(|_| Error::invalid("ObjectRef::get_omap"))?;
+        let result = self
+            .execute_read_operations(
+                vec![OSDOperation::OmapGetValuesByKeys(payload)],
+                options,
+                "ObjectRef::get_omap",
+            )
+            .await?;
+        let data = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected("ObjectRef::get_omap"))?
+            .data
+            .as_slice();
+        metadata::decode_map(data, data.len().max(1), maximum)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|entry| OmapEntry {
+                        key: entry.key,
+                        value: entry.value,
+                    })
+                    .collect()
+            })
+            .map_err(|_| Error::not_connected("ObjectRef::get_omap"))
+    }
+
+    /// Executes a consuming compound read as one server-side request.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn execute_read(
+        &self,
+        operation: ReadOp,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.execute_read_named(operation, options, "ObjectRef::execute_read")
+            .await
+    }
+
+    async fn execute_read_named(
+        &self,
+        operation: ReadOp,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<OpResult> {
+        self.execute_read_operations(operation.into_operations()?, options, operation_name)
+            .await
+            .map(|result| public_operation_result(result, operation_name))
+    }
+
+    /// Executes a consuming compound write atomically as one server-side request.
+    ///
+    /// # Errors
+    ///
+    /// Returns stable validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn execute_write(
+        &self,
+        operation: WriteOp,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let operation_name = "ObjectRef::execute_write";
+        let operations = operation.into_operations()?;
+        let options = self.prepare_operation(options, operation_name)?;
+        if self.pool.read_snapshot.is_some() {
+            return Err(Error::invalid(operation_name));
+        }
+        let monitor = self.pool.client.connected_monitor(operation_name)?;
+        let target = self.target(&monitor, operation_name)?;
+        self.pool
+            .client
+            .0
+            .objecter
+            .mutate_operations(monitor, target, operations, options)
+            .await
+            .map(|result| public_operation_result(result, operation_name))
+            .map_err(|error| map_osd_error(error, operation_name))
+    }
+
+    async fn execute_read_operations(
+        &self,
+        operations: Vec<OSDOperation>,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<CompoundResult> {
+        let options = self.prepare_operation(options, operation)?;
+        let monitor = self.pool.client.connected_monitor(operation)?;
+        let target = self.target(&monitor, operation)?;
+        self.pool
+            .client
+            .0
+            .objecter
+            .execute_operations(&monitor, target, operations, &options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))
+    }
+
+    fn prepare_operation(
+        &self,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<OperationOptions> {
+        let options = bounded_options(
+            options,
+            self.pool.client.0.config.operation_timeout(),
+            operation,
+        )?;
+        self.pool.client.ready(operation, &options)?;
+        Ok(options)
+    }
+
     async fn mutate(
         &self,
         operation: &'static str,
@@ -1087,6 +1710,37 @@ impl ObjectRef {
             namespace: self.pool.namespace.as_bytes().to_vec(),
             snapshot: self.pool.read_snapshot.unwrap_or(NO_SNAP),
         })
+    }
+}
+
+fn public_operation_result(result: CompoundResult, operation: &'static str) -> OpResult {
+    OpResult {
+        version: result.version,
+        results: result
+            .operations
+            .into_iter()
+            .map(|item| {
+                let error = (item.code < 0).then(|| {
+                    Error::from_wire(wire_error_kind(item.code), item.code)
+                        .with_operation(operation)
+                });
+                let value = if item.code > 0 {
+                    u64::try_from(item.code).unwrap_or_default()
+                } else if item.code <= -4095 {
+                    u64::try_from(-4095_i64 - i64::from(item.code)).unwrap_or_default()
+                } else if item.operation == 0x1202 && item.data.len() == 16 {
+                    u64::from_le_bytes(item.data[..8].try_into().unwrap_or_default())
+                } else {
+                    0
+                };
+                SubOperationResult {
+                    data: item.data,
+                    code: item.code,
+                    value,
+                    error,
+                }
+            })
+            .collect(),
     }
 }
 
@@ -1489,6 +2143,83 @@ mod tests {
         assert_eq!(pool.namespace(), b"");
         assert_eq!(object.pool().namespace(), [0xff, 0]);
         assert_eq!(object.name(), [0, 0xfe]);
+    }
+
+    #[test]
+    fn cursors_are_canonical_scoped_and_split_in_order() {
+        let client = client();
+        let pool = client.resolved_pool(7, b"pool").expect("pool");
+        let begin = pool.begin_object_cursor().expect("begin");
+        let end = pool.end_object_cursor().expect("end");
+        let boundaries = pool.split_cursor(&begin, &end, 4).expect("split");
+        assert_eq!(boundaries.len(), 5);
+        assert_eq!(boundaries.first(), Some(&begin));
+        assert_eq!(boundaries.last(), Some(&end));
+        assert!(
+            boundaries.windows(2).all(|pair| {
+                compare_object_cursors(&pair[0], &pair[1]) == Ok(CmpOrdering::Less)
+            })
+        );
+
+        let foreign = client
+            .resolved_pool(8, b"other")
+            .expect("pool")
+            .begin_object_cursor()
+            .expect("cursor");
+        assert!(compare_object_cursors(&begin, &foreign).is_err());
+
+        let malformed = crate::ObjectCursor {
+            pool_id: 7,
+            namespace: Vec::new(),
+            value: crate::osd::enumeration::marshal_cursor(&HObject {
+                key: Vec::new(),
+                object: Vec::new(),
+                snapshot: 1,
+                hash: 0,
+                max: false,
+                namespace: Vec::new(),
+                pool: i64::MIN,
+            })
+            .expect("encoding"),
+            end: false,
+        };
+        assert!(compare_object_cursors(&malformed, &begin).is_err());
+    }
+
+    #[test]
+    fn splitting_exhausted_cursor_preserves_empty_range() {
+        let client = client();
+        let pool = client.resolved_pool(7, b"pool").expect("pool");
+        let end = pool.end_object_cursor().expect("end");
+        let boundaries = pool.split_cursor(&end, &end, 4).expect("split");
+
+        assert_eq!(boundaries, vec![end; 5]);
+    }
+
+    #[test]
+    fn overfull_enumeration_page_resumes_at_first_omitted_entry() {
+        let entry = |hash: u32| HObject {
+            key: Vec::new(),
+            object: hash.to_le_bytes().to_vec(),
+            snapshot: NO_SNAP,
+            hash,
+            max: false,
+            namespace: Vec::new(),
+            pool: 7,
+        };
+        let entries = [entry(0), entry(0x8000_0000), entry(0x4000_0000)];
+        let finish = HObject {
+            key: Vec::new(),
+            object: Vec::new(),
+            snapshot: 0,
+            hash: 0,
+            max: true,
+            namespace: Vec::new(),
+            pool: 0,
+        };
+        let (next, count) = clip_enumeration_page(finish.clone(), 3, &entries, &finish, 2);
+        assert_eq!(count, 2);
+        assert_eq!(next, entries[2]);
     }
 
     #[test]
