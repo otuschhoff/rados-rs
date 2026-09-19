@@ -9,17 +9,18 @@ use crate::mon::seeds::{SeedError, SeedLimits, resolve_seeds};
 use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::session::{Config as SessionConfig, ReconnectPolicy, SessionError};
-use crate::osd::metadata;
 use crate::osd::{
     Client as OSDClient, ClientError, CompoundResult, HObject, NO_SNAP, OSDMutation,
     Operation as OSDOperation, Target as OSDTarget, compare_hobject,
 };
+use crate::osd::{lock, metadata, watch as osd_watch};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    Config, Error, ErrorKind, LocatorKey, Namespace, ObjectEntry, ObjectInfo, ObjectName,
+    ClassResult, Config, Error, ErrorKind, LocatorKey, LockMode, LockOptions, Locker, Namespace,
+    NotifyAcknowledgment, NotifyReply, NotifyTimeout, ObjectEntry, ObjectInfo, ObjectName,
     ObjectPage, OmapEntry, OpResult, OperationOptions, Page, ReadOp, Result, SecurityMode,
-    SubOperationResult, WriteOp, Xattr,
+    SubOperationResult, Watch, WatchEvent, Watcher, WriteOp, Xattr,
 };
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
@@ -29,7 +30,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc, watch};
 
 const MAX_KEY_BYTES: usize = 65_536;
 const FRAME_LIMITS: FrameLimits = FrameLimits {
@@ -52,6 +53,7 @@ const CANCELLATION_POLL: Duration = Duration::from_millis(10);
 
 struct ClientInner {
     config: Config,
+    address_nonce: u32,
     closed: AtomicBool,
     lifecycle: Mutex<()>,
     monitor: RwLock<Option<Arc<MonitorClient>>>,
@@ -89,6 +91,7 @@ impl Client {
     /// Returns an invalid-argument error when required local configuration is absent.
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
+        let address_nonce = random_nonzero_u32("Client::new")?;
         let authority = Arc::new(RwLock::new(None));
         let objecter = Arc::new(OSDClient::new(
             Arc::clone(&authority),
@@ -96,9 +99,11 @@ impl Client {
             config.dial_timeout(),
             config.handshake_timeout(),
             config.security_mode() == SecurityMode::Crc,
+            address_nonce,
         ));
         Ok(Self(Arc::new(ClientInner {
             config,
+            address_nonce,
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
@@ -112,6 +117,7 @@ impl Client {
     #[cfg(test)]
     fn with_factory(config: Config, factory: SessionFactory) -> Result<Self> {
         config.validate()?;
+        let address_nonce = random_nonzero_u32("Client::with_factory")?;
         let authority = Arc::new(RwLock::new(None));
         let objecter = Arc::new(OSDClient::new(
             Arc::clone(&authority),
@@ -119,9 +125,11 @@ impl Client {
             config.dial_timeout(),
             config.handshake_timeout(),
             config.security_mode() == SecurityMode::Crc,
+            address_nonce,
         ));
         Ok(Self(Arc::new(ClientInner {
             config,
+            address_nonce,
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
@@ -489,7 +497,8 @@ impl Client {
         let expected_fsid = self.0.config.cluster_fsid().map(parse_fsid).transpose()?;
         let placeholder =
             EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))
-                .map_err(|_| Error::invalid("Client::connect"))?;
+                .map_err(|_| Error::invalid("Client::connect"))?
+                .with_nonce(self.0.address_nonce);
         let client_cookie = random_nonzero("Client::connect")?;
         let session_config = SessionConfig {
             limits: FRAME_LIMITS,
@@ -1047,6 +1056,13 @@ fn random_nonzero(operation: &'static str) -> Result<u64> {
     Ok(u64::from_le_bytes(bytes).max(1))
 }
 
+fn random_nonzero_u32(operation: &'static str) -> Result<u32> {
+    let mut bytes = [0_u8; 4];
+    getrandom::fill(&mut bytes)
+        .map_err(|_| Error::new(ErrorKind::Unknown).with_operation(operation))?;
+    Ok(u32::from_le_bytes(bytes).max(1))
+}
+
 fn unix_now() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1167,6 +1183,105 @@ pub struct ObjectRef {
     name: ObjectName,
 }
 
+#[derive(Debug)]
+pub(crate) struct WatchInner {
+    object: ObjectRef,
+    cookie: u64,
+    timeout_seconds: u32,
+    stop: watch::Sender<bool>,
+    status: watch::Sender<Option<Error>>,
+    done: watch::Sender<bool>,
+    operation: Mutex<()>,
+    unwatched: AtomicBool,
+}
+
+impl Watch {
+    /// Returns the watch cookie used by the server.
+    #[must_use]
+    pub const fn cookie(&self) -> u64 {
+        self.cookie
+    }
+
+    /// Subscribes to sticky interruption and terminal-error status.
+    #[must_use]
+    pub fn errors(&self) -> watch::Receiver<Option<Error>> {
+        self.inner.status.subscribe()
+    }
+
+    /// Subscribes to watch termination. The current value is true once terminated.
+    #[must_use]
+    pub fn done(&self) -> watch::Receiver<bool> {
+        self.inner.done.subscribe()
+    }
+
+    /// Acknowledges one delivered notification with owned reply data.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn ack(
+        &self,
+        notify_id: u64,
+        data: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let payload =
+            osd_watch::encode_ack(notify_id, self.cookie, data.as_ref(), max_frame_bytes())
+                .map_err(|_| Error::invalid("Watch::ack"))?;
+        self.inner
+            .object
+            .coordination_mutation(
+                OSDOperation::NotifyAck {
+                    cookie: self.cookie,
+                    data: payload,
+                },
+                options,
+                "Watch::ack",
+            )
+            .await
+    }
+
+    /// Stops local delivery and unregisters the watch. A failed unregister may be retried.
+    ///
+    /// # Errors
+    ///
+    /// Returns routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn close(&self, options: OperationOptions) -> Result<()> {
+        self.inner.stop.send_replace(true);
+        self.inner.done.send_replace(true);
+        if self.inner.unwatched.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let options = bounded_options(
+            options,
+            self.inner.object.pool.client.0.config.operation_timeout(),
+            "Watch::close",
+        )?;
+        let _operation = wait_client_bounded(
+            async { Ok(self.inner.operation.lock().await) },
+            &options,
+            "Watch::close",
+        )
+        .await?;
+        if self.inner.unwatched.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.inner
+            .object
+            .watch_operation(
+                self.cookie,
+                osd_watch::OPERATION_UNWATCH,
+                0,
+                0,
+                options,
+                "Watch::close",
+            )
+            .await?;
+        self.inner.unwatched.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
 impl ObjectRef {
     #[must_use]
     pub fn name(&self) -> &[u8] {
@@ -1176,6 +1291,197 @@ impl ObjectRef {
     #[must_use]
     pub fn pool(&self) -> &Pool {
         &self.pool
+    }
+
+    /// Registers a bounded watch and returns its event receiver.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid argument for a zero or oversized queue, or routing, transport,
+    /// deadline, cancellation, and Ceph errors from registration.
+    pub async fn watch(
+        &self,
+        queue: u32,
+        options: OperationOptions,
+    ) -> Result<(Watch, mpsc::Receiver<WatchEvent>)> {
+        if queue == 0 || queue > crate::MAX_WATCH_QUEUE || self.pool.read_snapshot.is_some() {
+            return Err(Error::invalid("ObjectRef::watch"));
+        }
+        let notifications = self.pool.client.0.objecter.notifications();
+        let cookie = random_nonzero("ObjectRef::watch")?;
+        let timeout_seconds = duration_seconds(self.pool.client.0.config.operation_timeout());
+        self.watch_operation(
+            cookie,
+            osd_watch::OPERATION_REGISTER,
+            0,
+            timeout_seconds,
+            options,
+            "ObjectRef::watch",
+        )
+        .await?;
+
+        let (events_tx, events_rx) = mpsc::channel(queue as usize);
+        let (stop, _) = watch::channel(false);
+        let (status, _) = watch::channel(None);
+        let (done, _) = watch::channel(false);
+        let inner = Arc::new(WatchInner {
+            object: self.clone(),
+            cookie,
+            timeout_seconds,
+            stop,
+            status,
+            done,
+            operation: Mutex::new(()),
+            unwatched: AtomicBool::new(false),
+        });
+        let worker = tokio::spawn(run_watch(
+            Arc::clone(&inner),
+            notifications,
+            events_tx,
+            self.pool.client.0.objecter.watch_stop(),
+        ));
+        if let Err(worker) = self.pool.client.0.objecter.track_watch_worker(worker) {
+            inner.stop.send_replace(true);
+            worker.abort();
+            let _ = worker.await;
+            return Err(Error::closed("ObjectRef::watch"));
+        }
+        Ok((Watch { cookie, inner }, events_rx))
+    }
+
+    /// Notifies all current watchers, preserving partial acknowledgments on timeout.
+    ///
+    /// The second tuple element reports the operation outcome. In particular, a server
+    /// timeout can return both a populated reply and an error.
+    pub async fn notify(
+        &self,
+        data: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> (NotifyReply, Result<()>) {
+        let operation_name = "ObjectRef::notify";
+        let caller_deadline = options.deadline();
+        let options = match bounded_options(
+            options,
+            self.pool.client.0.config.operation_timeout(),
+            operation_name,
+        ) {
+            Ok(options) => options,
+            Err(error) => return (NotifyReply::default(), Err(error)),
+        };
+        let mut notifications = self.pool.client.0.objecter.notifications();
+        let mut client_stop = self.pool.client.0.objecter.watch_stop();
+        let cookie = match random_nonzero(operation_name) {
+            Ok(cookie) => cookie,
+            Err(error) => return (NotifyReply::default(), Err(error)),
+        };
+        let timeout_seconds = notify_timeout_seconds(self.pool.client.0.config.operation_timeout());
+        let Ok(payload) =
+            osd_watch::encode_notify(timeout_seconds, data.as_ref(), max_frame_bytes())
+        else {
+            return (NotifyReply::default(), Err(Error::invalid(operation_name)));
+        };
+        let result = match self
+            .coordination_mutation_result(
+                OSDOperation::Notify {
+                    cookie,
+                    data: payload,
+                },
+                options.clone(),
+                operation_name,
+            )
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => return (NotifyReply::default(), Err(error)),
+        };
+        let Some(item) = result.operations.first() else {
+            return (
+                NotifyReply::default(),
+                Err(Error::outcome_unknown(ErrorKind::NotConnected).with_operation(operation_name)),
+            );
+        };
+        if item.data.len() != 8 {
+            return (
+                NotifyReply::default(),
+                Err(Error::outcome_unknown(ErrorKind::NotConnected).with_operation(operation_name)),
+            );
+        }
+        let notify_id = u64::from_le_bytes(item.data[..8].try_into().unwrap_or_default());
+        let completion_deadline = caller_deadline.unwrap_or_else(|| {
+            Instant::now()
+                .checked_add(self.pool.client.0.config.operation_timeout())
+                .and_then(|deadline| deadline.checked_add(Duration::from_secs(5)))
+                .unwrap_or_else(Instant::now)
+        });
+        let completion_options = OperationOptions::new().with_deadline(completion_deadline);
+        let completion = wait_client_bounded(
+            wait_for_notify_completion(&mut notifications, &mut client_stop, cookie),
+            &completion_options,
+            operation_name,
+        )
+        .await;
+        let notification = match completion {
+            Ok(notification) => notification,
+            Err(error) => {
+                return (
+                    NotifyReply::default(),
+                    Err(Error::outcome_unknown(error.kind()).with_operation(operation_name)),
+                );
+            }
+        };
+        let reply = match decode_notify_reply(&notification.data, operation_name) {
+            Ok(reply) => reply,
+            Err(error) => {
+                return (
+                    NotifyReply::default(),
+                    Err(Error::outcome_unknown(error.kind()).with_operation(operation_name)),
+                );
+            }
+        };
+        if notification.notify_id != notify_id {
+            return (
+                reply,
+                Err(Error::outcome_unknown(ErrorKind::NotConnected).with_operation(operation_name)),
+            );
+        }
+        let outcome = if notification.result < 0 {
+            Err(
+                Error::from_wire(wire_error_kind(notification.result), notification.result)
+                    .with_operation(operation_name),
+            )
+        } else {
+            Ok(())
+        };
+        (reply, outcome)
+    }
+
+    /// Lists active watchers on this object.
+    ///
+    /// # Errors
+    ///
+    /// Returns routing, transport, deadline, cancellation, bounds, or Ceph errors.
+    pub async fn list_watchers(&self, options: OperationOptions) -> Result<Vec<Watcher>> {
+        let operation_name = "ObjectRef::list_watchers";
+        let result = self
+            .execute_read_operations(vec![OSDOperation::ListWatchers], options, operation_name)
+            .await?;
+        let data = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected(operation_name))?
+            .data
+            .as_slice();
+        let watchers = osd_watch::decode_watchers(data, max_frame_bytes(), data.len() / 17 + 1)
+            .map_err(|_| Error::not_connected(operation_name))?;
+        Ok(watchers
+            .into_iter()
+            .map(|watcher| Watcher {
+                client: format!("client.{}", watcher.client),
+                address: watcher.address,
+                cookie: watcher.cookie,
+                timeout: Duration::from_secs(u64::from(watcher.timeout_seconds)),
+            })
+            .collect())
     }
 
     /// Reads up to `length` bytes starting at `offset`.
@@ -1589,6 +1895,160 @@ impl ObjectRef {
             .await
     }
 
+    /// Executes one server-side object-class method as a conservative read-class call.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn exec(
+        &self,
+        class: impl AsRef<[u8]>,
+        method: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<ClassResult> {
+        let result = self
+            .execute_read_named(
+                ReadOp::new().exec(class, method, input)?,
+                options,
+                "ObjectRef::exec",
+            )
+            .await?;
+        let result = result
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_connected("ObjectRef::exec"))?;
+        Ok(ClassResult {
+            data: result.data,
+            code: result.code,
+        })
+    }
+
+    /// Acquires or renews a named advisory object lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn lock(
+        &self,
+        name: &str,
+        mode: LockMode,
+        lock_options: LockOptions,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let lock_type = match mode {
+            LockMode::Exclusive => lock::LOCK_EXCLUSIVE,
+            LockMode::Shared => lock::LOCK_SHARED,
+        };
+        let payload = lock::encode_lock(
+            &lock::Request {
+                name,
+                lock_type,
+                cookie: &lock_options.cookie,
+                tag: &lock_options.tag,
+                description: &lock_options.description,
+                duration: lock_options.duration,
+                renew: lock_options.renew,
+            },
+            max_frame_bytes(),
+        )
+        .map_err(|_| Error::invalid("ObjectRef::lock"))?;
+        self.execute_write_named(
+            WriteOp::new().exec(b"lock", b"lock", payload)?,
+            options,
+            "ObjectRef::lock",
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Releases the caller's named lock cookie.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn unlock(&self, name: &str, cookie: &str, options: OperationOptions) -> Result<()> {
+        let payload = lock::encode_unlock(name, cookie, max_frame_bytes())
+            .map_err(|_| Error::invalid("ObjectRef::unlock"))?;
+        self.execute_write_named(
+            WriteOp::new().exec(b"lock", b"unlock", payload)?,
+            options,
+            "ObjectRef::unlock",
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Lists the owners of a named advisory object lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, decode, or Ceph errors.
+    pub async fn list_lockers(&self, name: &str, options: OperationOptions) -> Result<Vec<Locker>> {
+        let payload = lock::encode_get_info(name, max_frame_bytes())
+            .map_err(|_| Error::invalid("ObjectRef::list_lockers"))?;
+        let result = self
+            .execute_read_named(
+                ReadOp::new().exec(b"lock", b"get_info", payload)?,
+                options,
+                "ObjectRef::list_lockers",
+            )
+            .await?;
+        let data = result
+            .results
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::not_connected("ObjectRef::list_lockers"))?
+            .data;
+        let info = lock::decode_info(&data, data.len().max(1), data.len() / 13 + 1)
+            .map_err(|_| Error::not_connected("ObjectRef::list_lockers"))?;
+        let mode = match info.lock_type {
+            lock::LOCK_EXCLUSIVE => LockMode::Exclusive,
+            lock::LOCK_SHARED => LockMode::Shared,
+            _ if info.holders.is_empty() => return Ok(Vec::new()),
+            _ => return Err(Error::not_connected("ObjectRef::list_lockers")),
+        };
+        Ok(info
+            .holders
+            .into_iter()
+            .map(|holder| Locker {
+                client: format!("client.{}", holder.client),
+                cookie: holder.cookie,
+                address: holder.address,
+                description: holder.description,
+                expiration: holder.expiration,
+                mode,
+                tag: info.tag.clone(),
+            })
+            .collect())
+    }
+
+    /// Breaks one named advisory lock owner by client identity and cookie.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn break_lock(
+        &self,
+        name: &str,
+        client: &str,
+        cookie: &str,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let client =
+            parse_lock_client(client).ok_or_else(|| Error::invalid("ObjectRef::break_lock"))?;
+        let payload = lock::encode_break(name, client, cookie, max_frame_bytes())
+            .map_err(|_| Error::invalid("ObjectRef::break_lock"))?;
+        self.execute_write_named(
+            WriteOp::new().exec(b"lock", b"break_lock", payload)?,
+            options,
+            "ObjectRef::break_lock",
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn execute_read_named(
         &self,
         operation: ReadOp,
@@ -1610,7 +2070,16 @@ impl ObjectRef {
         operation: WriteOp,
         options: OperationOptions,
     ) -> Result<OpResult> {
-        let operation_name = "ObjectRef::execute_write";
+        self.execute_write_named(operation, options, "ObjectRef::execute_write")
+            .await
+    }
+
+    async fn execute_write_named(
+        &self,
+        operation: WriteOp,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<OpResult> {
         let operations = operation.into_operations()?;
         let options = self.prepare_operation(options, operation_name)?;
         if self.pool.read_snapshot.is_some() {
@@ -1626,6 +2095,71 @@ impl ObjectRef {
             .await
             .map(|result| public_operation_result(result, operation_name))
             .map_err(|error| map_osd_error(error, operation_name))
+    }
+
+    async fn coordination_mutation(
+        &self,
+        operation: OSDOperation,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<()> {
+        self.coordination_mutation_result(operation, options, operation_name)
+            .await?;
+        Ok(())
+    }
+
+    async fn coordination_mutation_result(
+        &self,
+        operation: OSDOperation,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<CompoundResult> {
+        let options = self.prepare_operation(options, operation_name)?;
+        if self.pool.read_snapshot.is_some() {
+            return Err(Error::invalid(operation_name));
+        }
+        let monitor = self.pool.client.connected_monitor(operation_name)?;
+        let target = self.target(&monitor, operation_name)?;
+        let result = self
+            .pool
+            .client
+            .0
+            .objecter
+            .mutate_operations(monitor, target, vec![operation], options)
+            .await
+            .map_err(|error| map_osd_error(error, operation_name))?;
+        let item = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected(operation_name))?;
+        if item.code < 0 {
+            return Err(Error::from_wire(wire_error_kind(item.code), item.code)
+                .with_operation(operation_name));
+        }
+        Ok(result)
+    }
+
+    async fn watch_operation(
+        &self,
+        cookie: u64,
+        operation: u8,
+        generation: u32,
+        timeout: u32,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<()> {
+        self.coordination_mutation(
+            OSDOperation::Watch {
+                cookie,
+                version: 0,
+                operation,
+                generation,
+                timeout,
+            },
+            options,
+            operation_name,
+        )
+        .await
     }
 
     async fn execute_read_operations(
@@ -1713,6 +2247,239 @@ impl ObjectRef {
     }
 }
 
+fn duration_seconds(duration: Duration) -> u32 {
+    let rounded = duration
+        .as_secs()
+        .saturating_add(u64::from(duration.subsec_nanos() != 0));
+    u32::try_from(rounded.max(1)).unwrap_or(u32::MAX)
+}
+
+fn notify_timeout_seconds(duration: Duration) -> u32 {
+    duration_seconds(duration).saturating_sub(5).max(1)
+}
+
+fn max_frame_bytes() -> usize {
+    usize::try_from(FRAME_LIMITS.max_frame_bytes).unwrap_or(usize::MAX)
+}
+
+async fn wait_for_notify_completion(
+    notifications: &mut tokio::sync::broadcast::Receiver<osd_watch::Notification>,
+    client_stop: &mut watch::Receiver<bool>,
+    cookie: u64,
+) -> Result<osd_watch::Notification> {
+    let operation = "ObjectRef::notify";
+    loop {
+        if *client_stop.borrow() {
+            return Err(Error::closed(operation));
+        }
+        tokio::select! {
+            received = notifications.recv() => match received {
+                Ok(notification)
+                    if notification.cookie == cookie
+                        && notification.opcode == osd_watch::EVENT_COMPLETE =>
+                {
+                    return Ok(notification);
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    return Err(Error::new(ErrorKind::OutcomeUnknown).with_operation(operation));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(Error::closed(operation));
+                }
+            },
+            changed = client_stop.changed() => {
+                if changed.is_err() || *client_stop.borrow() {
+                    return Err(Error::closed(operation));
+                }
+            }
+        }
+    }
+}
+
+fn decode_notify_reply(data: &[u8], operation: &'static str) -> Result<NotifyReply> {
+    let (acknowledged, timed_out) =
+        osd_watch::decode_notify_result(data, max_frame_bytes(), data.len() / 16 + 1)
+            .map_err(|_| Error::not_connected(operation))?;
+    Ok(NotifyReply {
+        acknowledged: acknowledged
+            .into_iter()
+            .map(|item| NotifyAcknowledgment {
+                client: item.client,
+                cookie: item.cookie,
+                data: item.data,
+            })
+            .collect(),
+        timed_out: timed_out
+            .into_iter()
+            .map(|item| NotifyTimeout {
+                client: item.client,
+                cookie: item.cookie,
+            })
+            .collect(),
+    })
+}
+
+async fn run_watch(
+    watch: Arc<WatchInner>,
+    mut notifications: tokio::sync::broadcast::Receiver<osd_watch::Notification>,
+    events: mpsc::Sender<WatchEvent>,
+    mut client_stop: watch::Receiver<bool>,
+) {
+    if *watch.stop.borrow() || *client_stop.borrow() {
+        watch.done.send_replace(true);
+        return;
+    }
+    let period = Duration::from_secs(u64::from(watch.timeout_seconds)) / 3;
+    let mut keepalive = tokio::time::interval(period.max(Duration::from_secs(1)));
+    keepalive.tick().await;
+    let mut stop = watch.stop.subscribe();
+    let mut generation = 0_u32;
+    loop {
+        tokio::select! {
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+            changed = client_stop.changed() => {
+                if changed.is_err() || *client_stop.borrow() {
+                    break;
+                }
+            }
+            received = notifications.recv() => match received {
+                Ok(notification)
+                    if notification.cookie == 0
+                        && notification.opcode == osd_watch::EVENT_DISCONNECT =>
+                {
+                    if !recover_watch(&watch, &mut generation).await {
+                        break;
+                    }
+                }
+                Ok(notification) if notification.cookie != watch.cookie => {}
+                Ok(notification) if notification.opcode == osd_watch::EVENT_NOTIFY => {
+                    let event = WatchEvent {
+                        notify_id: notification.notify_id,
+                        cookie: notification.cookie,
+                        notifier: notification.notifier,
+                        data: notification.data,
+                    };
+                    if events.try_send(event).is_err() {
+                        report_watch_error(&watch, ErrorKind::WatchInterrupted);
+                        break;
+                    }
+                }
+                Ok(notification) if notification.opcode == osd_watch::EVENT_DISCONNECT => {
+                    report_watch_error(&watch, ErrorKind::WatchInterrupted);
+                    if !recover_watch(&watch, &mut generation).await {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    report_watch_error(&watch, ErrorKind::WatchInterrupted);
+                    break;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    report_watch_error(&watch, ErrorKind::Closed);
+                    break;
+                }
+            },
+            _ = keepalive.tick() => {
+                let operation_guard = watch.operation.lock().await;
+                let options = worker_options(&watch);
+                let ping = watch.object.watch_operation(
+                    watch.cookie,
+                    osd_watch::OPERATION_PING,
+                    generation,
+                    0,
+                    options,
+                    "Watch::keepalive",
+                ).await;
+                drop(operation_guard);
+                if ping.is_err() {
+                    report_watch_error(&watch, ErrorKind::WatchInterrupted);
+                    if !recover_watch(&watch, &mut generation).await {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    watch.done.send_replace(true);
+}
+
+async fn recover_watch(watch: &WatchInner, generation: &mut u32) -> bool {
+    let Some(next_generation) = generation.checked_add(1) else {
+        report_watch_error(watch, ErrorKind::WatchInterrupted);
+        return false;
+    };
+    *generation = next_generation;
+    let _operation = watch.operation.lock().await;
+    if *watch.stop.borrow() {
+        return false;
+    }
+    let reconnect = watch
+        .object
+        .watch_operation(
+            watch.cookie,
+            osd_watch::OPERATION_RECONNECT,
+            *generation,
+            watch.timeout_seconds,
+            worker_options(watch),
+            "Watch::reconnect",
+        )
+        .await;
+    if reconnect.is_ok() {
+        return true;
+    }
+    *generation = 0;
+    let register = watch
+        .object
+        .watch_operation(
+            watch.cookie,
+            osd_watch::OPERATION_REGISTER,
+            0,
+            watch.timeout_seconds,
+            worker_options(watch),
+            "Watch::reregister",
+        )
+        .await;
+    if let Err(error) = register {
+        watch.status.send_if_modified(|status| {
+            if status.is_some() {
+                false
+            } else {
+                *status = Some(error);
+                true
+            }
+        });
+        false
+    } else {
+        true
+    }
+}
+
+fn worker_options(watch: &WatchInner) -> OperationOptions {
+    let lease_slice =
+        (Duration::from_secs(u64::from(watch.timeout_seconds)) / 3).max(Duration::from_secs(1));
+    let timeout = lease_slice.min(watch.object.pool.client.0.config.operation_timeout());
+    OperationOptions::new()
+        .with_timeout(timeout)
+        .unwrap_or_default()
+}
+
+fn report_watch_error(watch: &WatchInner, kind: ErrorKind) {
+    watch.status.send_if_modified(|status| {
+        if status.is_some() {
+            false
+        } else {
+            *status = Some(Error::new(kind).with_operation("ObjectRef::watch"));
+            true
+        }
+    });
+}
+
 fn public_operation_result(result: CompoundResult, operation: &'static str) -> OpResult {
     OpResult {
         version: result.version,
@@ -1742,6 +2509,10 @@ fn public_operation_result(result: CompoundResult, operation: &'static str) -> O
             })
             .collect(),
     }
+}
+
+fn parse_lock_client(value: &str) -> Option<u64> {
+    value.strip_prefix("client.")?.parse::<u64>().ok()
 }
 
 fn map_osd_error(error: ClientError, operation: &'static str) -> Error {
@@ -1799,7 +2570,7 @@ mod tests {
     use std::pin::pin;
     use std::sync::atomic::AtomicUsize;
     use std::task::{Context, Poll, Waker};
-    use tokio::sync::mpsc;
+    use tokio::sync::{broadcast, mpsc, watch};
 
     const KEY: &str = "AQB7AAAAyAEAABAAMTIzNDU2Nzg5MDEyMzQ1Ng==";
 
@@ -1909,6 +2680,215 @@ mod tests {
                 .expect("monitors"),
         )
         .expect("client")
+    }
+
+    fn test_object() -> ObjectRef {
+        ObjectRef {
+            pool: Pool {
+                client: client(),
+                id: Some(7),
+                name: ObjectName::new(b"pool").expect("pool"),
+                namespace: Namespace::new(b"").expect("namespace"),
+                locator: LocatorKey::new(b"").expect("locator"),
+                read_snapshot: None,
+            },
+            name: ObjectName::new(b"object").expect("object"),
+        }
+    }
+
+    fn test_watch(object: ObjectRef, cookie: u64) -> Arc<WatchInner> {
+        let (stop, _) = watch::channel(false);
+        let (status, _) = watch::channel(None);
+        let (done, _) = watch::channel(false);
+        Arc::new(WatchInner {
+            object,
+            cookie,
+            timeout_seconds: 3_600,
+            stop,
+            status,
+            done,
+            operation: Mutex::new(()),
+            unwatched: AtomicBool::new(false),
+        })
+    }
+
+    #[tokio::test]
+    async fn watch_forwards_owned_events_and_stops_on_overflow() {
+        let (notifications, receiver) = broadcast::channel(4);
+        let (events_tx, mut events_rx) = mpsc::channel(1);
+        let (_client_stop_tx, client_stop) = watch::channel(false);
+        let inner = test_watch(test_object(), 9);
+        let mut done = inner.done.subscribe();
+        let status = inner.status.subscribe();
+        let worker = tokio::spawn(run_watch(
+            Arc::clone(&inner),
+            receiver,
+            events_tx,
+            client_stop,
+        ));
+        notifications
+            .send(osd_watch::Notification {
+                cookie: 9,
+                version: 1,
+                notify_id: 11,
+                opcode: osd_watch::EVENT_NOTIFY,
+                data: vec![0, 0xff],
+                result: 0,
+                notifier: 12,
+            })
+            .expect("first notification");
+        notifications
+            .send(osd_watch::Notification {
+                cookie: 9,
+                version: 2,
+                notify_id: 13,
+                opcode: osd_watch::EVENT_NOTIFY,
+                data: vec![1],
+                result: 0,
+                notifier: 14,
+            })
+            .expect("overflow notification");
+        tokio::time::timeout(Duration::from_secs(1), done.wait_for(|done| *done))
+            .await
+            .expect("watch stop timeout")
+            .expect("done channel");
+        let event = events_rx.recv().await.expect("first event");
+        assert_eq!(
+            event,
+            WatchEvent {
+                notify_id: 11,
+                cookie: 9,
+                notifier: 12,
+                data: vec![0, 0xff],
+            }
+        );
+        assert_eq!(
+            status.borrow().as_ref().map(Error::kind),
+            Some(ErrorKind::WatchInterrupted)
+        );
+        worker.await.expect("watch worker");
+    }
+
+    #[tokio::test]
+    async fn watch_stops_when_event_receiver_is_dropped() {
+        let (notifications, receiver) = broadcast::channel(1);
+        let (events_tx, events_rx) = mpsc::channel(1);
+        drop(events_rx);
+        let (_client_stop_tx, client_stop) = watch::channel(false);
+        let inner = test_watch(test_object(), 4);
+        let mut done = inner.done.subscribe();
+        let worker = tokio::spawn(run_watch(
+            Arc::clone(&inner),
+            receiver,
+            events_tx,
+            client_stop,
+        ));
+        notifications
+            .send(osd_watch::Notification {
+                cookie: 4,
+                version: 1,
+                notify_id: 2,
+                opcode: osd_watch::EVENT_NOTIFY,
+                data: Vec::new(),
+                result: 0,
+                notifier: 3,
+            })
+            .expect("notification");
+        tokio::time::timeout(Duration::from_secs(1), done.wait_for(|done| *done))
+            .await
+            .expect("watch stop timeout")
+            .expect("done channel");
+        assert_eq!(
+            inner.status.borrow().as_ref().map(Error::kind),
+            Some(ErrorKind::WatchInterrupted)
+        );
+        worker.await.expect("watch worker");
+    }
+
+    #[tokio::test]
+    async fn watch_worker_observes_stop_set_before_start() {
+        let (_notifications, receiver) = broadcast::channel(1);
+        let (events_tx, _events_rx) = mpsc::channel(1);
+        let (client_stop_tx, client_stop) = watch::channel(false);
+        client_stop_tx.send_replace(true);
+        let inner = test_watch(test_object(), 4);
+        let mut done = inner.done.subscribe();
+        let worker = tokio::spawn(run_watch(
+            Arc::clone(&inner),
+            receiver,
+            events_tx,
+            client_stop,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), done.wait_for(|done| *done))
+            .await
+            .expect("watch stop timeout")
+            .expect("done channel");
+        worker.await.expect("watch worker");
+    }
+
+    #[tokio::test]
+    async fn session_failure_triggers_immediate_watch_recovery() {
+        let (notifications, receiver) = broadcast::channel(1);
+        let (events_tx, _events_rx) = mpsc::channel(1);
+        let (_client_stop_tx, client_stop) = watch::channel(false);
+        let inner = test_watch(test_object(), 4);
+        let mut done = inner.done.subscribe();
+        let worker = tokio::spawn(run_watch(
+            Arc::clone(&inner),
+            receiver,
+            events_tx,
+            client_stop,
+        ));
+        notifications
+            .send(osd_watch::Notification {
+                cookie: 0,
+                version: 0,
+                notify_id: 0,
+                opcode: osd_watch::EVENT_DISCONNECT,
+                data: Vec::new(),
+                result: 0,
+                notifier: 0,
+            })
+            .expect("session failure");
+        tokio::time::timeout(Duration::from_secs(1), done.wait_for(|done| *done))
+            .await
+            .expect("watch recovery timeout")
+            .expect("done channel");
+        assert!(inner.status.borrow().is_some());
+        worker.await.expect("watch worker");
+    }
+
+    #[test]
+    fn notify_reply_preserves_acknowledgments_and_timeouts() {
+        let mut encoder = Encoder::new(256);
+        encoder.u32(1);
+        encoder.u64(11);
+        encoder.u64(12);
+        encoder.bytes(&[0, 0xff]);
+        encoder.u32(1);
+        encoder.u64(21);
+        encoder.u64(22);
+        let bytes = encoder.finish().expect("notify reply");
+        let reply = decode_notify_reply(&bytes, "test").expect("decoded reply");
+        assert_eq!(
+            reply.acknowledged,
+            vec![NotifyAcknowledgment {
+                client: 11,
+                cookie: 12,
+                data: vec![0, 0xff],
+            }]
+        );
+        assert_eq!(
+            reply.timed_out,
+            vec![NotifyTimeout {
+                client: 21,
+                cookie: 22,
+            }]
+        );
+        assert_eq!(duration_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(duration_seconds(Duration::from_millis(1_001)), 2);
+        assert_eq!(notify_timeout_seconds(Duration::from_secs(4)), 1);
+        assert_eq!(notify_timeout_seconds(Duration::from_secs(30)), 25);
     }
 
     #[tokio::test]

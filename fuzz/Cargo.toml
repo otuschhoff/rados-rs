@@ -22,7 +22,7 @@ cbc = { version = "=0.2.1", features = ["alloc"] }
 crc32c = "=0.6.8"
 hmac = "=0.13.0"
 libfuzzer-sys = "=0.4.13"
-rados = { package = "rados-rs", path = "..", features = ["r05-integration", "r06-integration", "r07-integration", "r08-integration", "r09-integration"] }
+rados = { package = "rados-rs", path = "..", features = ["r05-integration", "r06-integration", "r07-integration", "r08-integration", "r09-integration", "r10-integration"] }
 sha2 = "=0.11.0"
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
@@ -254,6 +254,27 @@ bench = false
 [[bin]]
 name = "r09_enumeration"
 path = "fuzz_targets/r09_enumeration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r10_class"
+path = "fuzz_targets/r10_class.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r10_lock"
+path = "fuzz_targets/r10_lock.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "r10_watch"
+path = "fuzz_targets/r10_watch.rs"
 test = false
 doc = false
 bench = false

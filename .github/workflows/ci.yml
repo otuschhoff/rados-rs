@@ -70,6 +70,10 @@ jobs:
         run: |
           cargo run --locked -p rados-r09-tools --bin rados-r09-verify -- . docs/r09/live-qualification-report.json
           cargo run --locked -p rados-r09-tools --bin rados-r09-verify-fuzz -- . docs/r09/fuzz-validation-report.json
+      - name: Verify checked-in R10 evidence
+        run: |
+          cargo run --locked -p rados-r10-tools --bin rados-r10-verify -- . docs/r10/live-qualification-report.json
+          cargo run --locked -p rados-r10-tools --bin rados-r10-verify-fuzz -- . docs/r10/fuzz-validation-report.json
       - name: Install pinned audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -145,3 +149,9 @@ jobs:
           cargo +nightly-2026-09-01 fuzz run r09_metadata /tmp/rados-r09-corpus/r09_metadata -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r09_compound /tmp/rados-r09-corpus/r09_compound -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r09_enumeration /tmp/rados-r09-corpus/r09_enumeration -- -max_total_time=10
+      - name: Run class, lock and watch fuzz smoke tests
+        run: |
+          integration/r10/prepare-fuzz-corpus.sh /tmp/rados-r10-corpus
+          cargo +nightly-2026-09-01 fuzz run r10_class /tmp/rados-r10-corpus/r10_class -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r10_lock /tmp/rados-r10-corpus/r10_lock -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r10_watch /tmp/rados-r10-corpus/r10_watch -- -max_total_time=10

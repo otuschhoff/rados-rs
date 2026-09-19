@@ -6,8 +6,9 @@ R02 API contracts and bounded wire types are complete. R03 private messenger
 codecs, session state and committed-tree differential verification are complete;
 R04 CephX authentication and secure monitor sessions, R05 configuration/maps,
 R06 exact placement, R07 read-only object I/O, R08 mutation qualification and
-R09 metadata, atomic builders and enumeration are complete. R09 has fresh
-Rust/Go/native evidence against the pinned Ceph 20.2.4 replicated profile.
+R09 metadata, atomic builders and enumeration, and R10 classes, locks and
+watches are complete. R10 has fresh Rust/Go/native evidence against the pinned
+Ceph 20.2.4 replicated profile.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -32,6 +33,11 @@ enumeration with opaque cursors. The live gate passed native interoperability,
 conditional contention, failed-compound atomicity, namespace isolation,
 partitioned scans and continuation across a live PG-count change.
 
+The R10 API scope adds server-side class calls, advisory lock lifecycle, and
+watch/notify coordination. The live gate passed native interoperability,
+partial notify timeout preservation, remap and OSD-restart recovery, observable
+watch loss, and bounded shutdown on the pinned three-OSD replicated profile.
+
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
 
@@ -54,6 +60,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R07 read-only object status](docs/r07/STATUS.md)
 - [R08 mutation qualification status](docs/r08/STATUS.md)
 - [R09 metadata, compound and enumeration status](docs/r09/STATUS.md)
+- [R10 classes, locks and watches status](docs/r10/STATUS.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "started_at", "finished_at", "schema_sha256", "rust", "go", "native", "server", "cluster", "probe", "scenarios", "deviations"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite_id": { "const": "r10/classes-locks-watches-v1" },
+    "status": { "const": "passed" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "schema_sha256": { "$ref": "#/$defs/sha256" },
+    "rust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/git" }, "tree": { "$ref": "#/$defs/git" }, "source_sha256": { "$ref": "#/$defs/sha256" },
+        "compiler_image": { "const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922" },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] }, "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "go": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "compiler", "platform", "p09_driver_sha256", "focused_tests"],
+      "properties": {
+        "revision": { "const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4" }, "tree": { "const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7" },
+        "compiler": { "const": "go1.26.8" }, "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+        "p09_driver_sha256": { "$ref": "#/$defs/sha256" }, "focused_tests": { "const": "passed" }
+      }
+    },
+    "native": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "binary_sha256", "seed", "watch", "notify", "verify"],
+      "properties": {
+        "version": { "const": "librados2-20.2.4-0.el9" }, "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "seed": { "$ref": "#/$defs/native_seed" }, "watch": { "$ref": "#/$defs/native_watch" },
+        "notify": { "$ref": "#/$defs/native_notify" }, "verify": { "$ref": "#/$defs/native_verify" }
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": { "const": "7f793731f1b39eb4f465e960113d2363c311b964" },
+        "version": { "const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)" },
+        "image": { "const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cluster": {
+      "type": "object", "additionalProperties": false, "required": ["fsid", "osds", "pool", "replicas"],
+      "properties": { "fsid": { "const": "11111111-2222-4333-8444-101010101010" }, "osds": { "const": 3 }, "pool": { "const": "p10-data" }, "replicas": { "const": 2 } }
+    },
+    "probe": { "$ref": "#/$defs/probe" },
+    "scenarios": { "$ref": "#/$defs/scenarios" },
+    "deviations": {
+      "type": "object", "additionalProperties": false, "required": ["notify_outcome_shape", "notification_dispatch", "ambiguous_coordination_replay"],
+      "properties": { "notify_outcome_shape": { "type": "string", "minLength": 1 }, "notification_dispatch": { "type": "string", "minLength": 1 }, "ambiguous_coordination_replay": { "type": "string", "minLength": 1 } }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["class_execution", "lock_contention", "lock_renew", "lock_break", "lock_shared", "lock_expiry", "watch_ack", "notify_timeout", "native_locks", "native_watch", "native_notify", "watch_remap", "osd_restart", "explicit_unregister", "watch_shutdown", "client_shutdown"],
+      "properties": {
+        "class_execution": { "const": true }, "lock_contention": { "const": true }, "lock_renew": { "const": true }, "lock_break": { "const": true },
+        "lock_shared": { "const": true }, "lock_expiry": { "const": true }, "watch_ack": { "const": true }, "notify_timeout": { "const": true },
+        "native_locks": { "const": true }, "native_watch": { "const": true }, "native_notify": { "const": true }, "watch_remap": { "const": true },
+        "osd_restart": { "const": true }, "explicit_unregister": { "const": true }, "watch_shutdown": { "const": true }, "client_shutdown": { "const": true }
+      }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["class_execution", "lock_interoperability", "lock_lease_lifecycle", "watch_notify_interoperability", "partial_timeout_results", "remap_reregistration", "osd_restart", "explicit_unregister", "lost_watch_observability", "bounded_shutdown"],
+      "properties": {
+        "class_execution": { "const": "passed" }, "lock_interoperability": { "const": "passed" }, "lock_lease_lifecycle": { "const": "passed" },
+        "watch_notify_interoperability": { "const": "passed" }, "partial_timeout_results": { "const": "passed" }, "remap_reregistration": { "const": "passed" },
+        "osd_restart": { "const": "passed" }, "explicit_unregister": { "const": "passed" }, "lost_watch_observability": { "const": "passed" }, "bounded_shutdown": { "const": "passed" }
+      }
+    },
+    "native_seed": { "type": "object", "additionalProperties": false, "required": ["native_exec", "native_exec_result", "native_exec_output", "native_lock_seed", "native_lock_renew", "native_lock_release", "native_lock_expiry"], "properties": { "native_exec": { "const": true }, "native_exec_result": { "type": "integer", "minimum": 1 }, "native_exec_output": { "type": "string", "minLength": 2 }, "native_lock_seed": { "const": true }, "native_lock_renew": { "const": true }, "native_lock_release": { "const": true }, "native_lock_expiry": { "const": true } } },
+    "native_watch": { "type": "object", "additionalProperties": false, "required": ["go_notify_native_watch", "native_watch_remap", "native_watch_restart", "native_watch_same_cookie", "native_watch_exactly_once", "native_lock_shared", "native_shared_release"], "properties": { "go_notify_native_watch": { "const": true }, "native_watch_remap": { "const": true }, "native_watch_restart": { "const": true }, "native_watch_same_cookie": { "const": true }, "native_watch_exactly_once": { "const": true }, "native_lock_shared": { "const": true }, "native_shared_release": { "const": true } } },
+    "native_notify": { "type": "object", "additionalProperties": false, "required": ["native_notify_go_watch"], "properties": { "native_notify_go_watch": { "const": true } } },
+    "native_verify": { "type": "object", "additionalProperties": false, "required": ["go_lock_native_read", "native_break_go_lock"], "properties": { "go_lock_native_read": { "const": true }, "native_break_go_lock": { "const": true } } }
+  }
+}

@@ -8,7 +8,10 @@ const MESSAGE_OSD_OP: u16 = 42;
 const MESSAGE_OSD_OP_REPLY: u16 = 43;
 const OP_READ: u16 = 0x1201;
 const OP_STAT: u16 = 0x1202;
+const OP_NOTIFY: u16 = 0x1206;
+const OP_NOTIFY_ACK: u16 = 0x1207;
 const OP_ASSERT_VERSION: u16 = 0x1208;
+const OP_LIST_WATCHERS: u16 = 0x1209;
 const OP_OMAP_GET_VALUES: u16 = 0x1212;
 const OP_OMAP_GET_HEADER: u16 = 0x1213;
 const OP_OMAP_GET_VALUES_BY_KEYS: u16 = 0x1214;
@@ -16,6 +19,7 @@ const OP_OMAP_COMPARE: u16 = 0x1219;
 const OP_COMPARE_EXTENT: u16 = 0x1220;
 const OP_GET_XATTR: u16 = 0x1301;
 const OP_GET_XATTRS: u16 = 0x1302;
+const OP_CALL: u16 = 0x1401;
 const OP_PGN_LIST: u16 = 0x1505;
 const OP_WRITE: u16 = 0x2201;
 const OP_WRITE_FULL: u16 = 0x2202;
@@ -23,6 +27,7 @@ const OP_TRUNCATE: u16 = 0x2203;
 const OP_ZERO: u16 = 0x2204;
 const OP_DELETE: u16 = 0x2205;
 const OP_APPEND: u16 = 0x2206;
+const OP_WATCH: u16 = 0x220f;
 const OP_CREATE: u16 = 0x220d;
 const OP_OMAP_SET_VALUES: u16 = 0x2215;
 const OP_OMAP_SET_HEADER: u16 = 0x2216;
@@ -80,6 +85,29 @@ pub(crate) enum Operation {
     OmapClear,
     OmapRemoveKeys(Vec<u8>),
     OmapRemoveRange(Vec<u8>),
+    Call {
+        class_length: u8,
+        method_length: u8,
+        input_length: u32,
+        data: Vec<u8>,
+        mutation: bool,
+    },
+    Watch {
+        cookie: u64,
+        version: u64,
+        operation: u8,
+        generation: u32,
+        timeout: u32,
+    },
+    Notify {
+        cookie: u64,
+        data: Vec<u8>,
+    },
+    NotifyAck {
+        cookie: u64,
+        data: Vec<u8>,
+    },
+    ListWatchers,
     PGNList {
         cursor: Vec<u8>,
         cursor_hash: u32,
@@ -114,7 +142,10 @@ impl Operation {
         match self {
             Self::Read { .. } => OP_READ,
             Self::Stat => OP_STAT,
+            Self::Notify { .. } => OP_NOTIFY,
+            Self::NotifyAck { .. } => OP_NOTIFY_ACK,
             Self::AssertVersion(_) => OP_ASSERT_VERSION,
+            Self::ListWatchers => OP_LIST_WATCHERS,
             Self::CompareExtent { .. } => OP_COMPARE_EXTENT,
             Self::GetXattr(_) => OP_GET_XATTR,
             Self::GetXattrs => OP_GET_XATTRS,
@@ -129,6 +160,8 @@ impl Operation {
             Self::OmapClear => OP_OMAP_CLEAR,
             Self::OmapRemoveKeys(_) => OP_OMAP_REMOVE_KEYS,
             Self::OmapRemoveRange(_) => OP_OMAP_REMOVE_RANGE,
+            Self::Call { .. } => OP_CALL,
+            Self::Watch { .. } => OP_WATCH,
             Self::PGNList { .. } => OP_PGN_LIST,
             Self::Create { .. } => OP_CREATE,
             Self::Write { .. } => OP_WRITE,
@@ -144,6 +177,7 @@ impl Operation {
     pub(crate) const fn is_mutation(&self) -> bool {
         match self {
             Self::WithFlags { operation, .. } => operation.is_mutation(),
+            Self::Call { mutation, .. } => *mutation,
             _ => self.code() & 0x2000 != 0,
         }
     }
@@ -171,6 +205,9 @@ impl Operation {
             | Self::OmapSetHeader(data)
             | Self::OmapRemoveKeys(data)
             | Self::OmapRemoveRange(data)
+            | Self::Call { data, .. }
+            | Self::Notify { data, .. }
+            | Self::NotifyAck { data, .. }
             | Self::PGNList { cursor: data, .. } => output.extend_from_slice(data),
             Self::SetXattr { name, value } => {
                 output.extend_from_slice(name);
@@ -198,6 +235,9 @@ impl Operation {
             | Self::OmapSetHeader(data)
             | Self::OmapRemoveKeys(data)
             | Self::OmapRemoveRange(data)
+            | Self::Call { data, .. }
+            | Self::Notify { data, .. }
+            | Self::NotifyAck { data, .. }
             | Self::PGNList { cursor: data, .. } => data.len(),
             _ => 0,
         }
@@ -489,10 +529,7 @@ fn encode_locator(encoder: &mut Encoder, pool: i64, locator: &[u8], namespace: &
 fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
     encoder.u16(operation.code());
     encoder.u32(operation.flags());
-    let operation = match operation {
-        Operation::WithFlags { operation, .. } => operation.as_ref(),
-        operation => operation,
-    };
+    let operation = unwrapped_operation(operation);
     match operation {
         Operation::GetXattr(name) | Operation::RemoveXattr(name) => {
             encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
@@ -538,6 +575,36 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
             encoder.u64(0);
             encoder.raw(&[0; 12]);
         }
+        Operation::Call {
+            class_length,
+            method_length,
+            input_length,
+            ..
+        } => {
+            encoder.u8(*class_length);
+            encoder.u8(*method_length);
+            encoder.u8(0);
+            encoder.u32(*input_length);
+            encoder.raw(&[0; 21]);
+        }
+        Operation::Watch {
+            cookie,
+            version,
+            operation,
+            generation,
+            timeout,
+        } => {
+            encoder.u64(*cookie);
+            encoder.u64(*version);
+            encoder.u8(*operation);
+            encoder.u32(*generation);
+            encoder.u32(*timeout);
+            encoder.raw(&[0; 3]);
+        }
+        Operation::Notify { cookie, .. } | Operation::NotifyAck { cookie, .. } => {
+            encoder.u64(*cookie);
+            encoder.raw(&[0; 20]);
+        }
         Operation::PGNList {
             count, start_epoch, ..
         } => {
@@ -546,6 +613,7 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
             encoder.raw(&[0; 16]);
         }
         Operation::Stat
+        | Operation::ListWatchers
         | Operation::OmapGetHeader
         | Operation::OmapClear
         | Operation::Create { .. }
@@ -557,6 +625,13 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
         Operation::WithFlags { .. } => unreachable!("flags wrapper was removed"),
     }
     encoder.u32(u32::try_from(operation.data_len()).unwrap_or(u32::MAX));
+}
+
+fn unwrapped_operation(operation: &Operation) -> &Operation {
+    match operation {
+        Operation::WithFlags { operation, .. } => operation,
+        operation => operation,
+    }
 }
 
 fn decode_redirect(decoder: &mut Decoder<'_>) -> Result<Redirect, Error> {
@@ -850,6 +925,76 @@ mod tests {
         )
         .expect("request");
         assert_eq!(request.data, b"comparenamekeyvalueomap");
+    }
+
+    #[test]
+    fn class_call_descriptor_preserves_names_input_and_mutation_classification() {
+        let operation = Operation::Call {
+            class_length: 4,
+            method_length: 6,
+            input_length: 5,
+            data: b"testmethodinput".to_vec(),
+            mutation: false,
+        };
+        let mut encoder = Encoder::new(128);
+        encode_operation(&mut encoder, &operation);
+        let bytes = encoder.finish().expect("descriptor");
+        let mut decoder = Decoder::new(&bytes, bytes.len());
+        assert_eq!(decoder.u16(), OP_CALL);
+        assert_eq!(decoder.u32(), 0);
+        assert_eq!(decoder.u8(), 4);
+        assert_eq!(decoder.u8(), 6);
+        assert_eq!(decoder.u8(), 0);
+        assert_eq!(decoder.u32(), 5);
+        assert_eq!(decoder.raw(21), vec![0; 21]);
+        assert_eq!(decoder.u32(), 15);
+        decoder.finish().expect("descriptor fields");
+        assert!(!operation.is_mutation());
+        assert!(matches!(
+            Operation::Call {
+                class_length: 1,
+                method_length: 1,
+                input_length: 0,
+                data: Vec::new(),
+                mutation: true,
+            },
+            value if value.is_mutation()
+        ));
+
+        let request = encode_request(&request(&[operation]), LIMITS).expect("request");
+        assert_eq!(request.data, b"testmethodinput");
+    }
+
+    #[test]
+    fn watch_and_notify_descriptors_match_frozen_go_unions() {
+        let watch = Operation::Watch {
+            cookie: 0x0102_0304_0506_0708,
+            version: 9,
+            operation: 5,
+            generation: 10,
+            timeout: 11,
+        };
+        let mut encoder = Encoder::new(64);
+        encode_operation(&mut encoder, &watch);
+        let bytes = encoder.finish().expect("watch descriptor");
+        assert_eq!(
+            &bytes[6..34],
+            &[
+                8, 7, 6, 5, 4, 3, 2, 1, 9, 0, 0, 0, 0, 0, 0, 0, 5, 10, 0, 0, 0, 11, 0, 0, 0, 0, 0,
+                0
+            ]
+        );
+        assert!(watch.is_mutation());
+
+        let notify = Operation::Notify {
+            cookie: 0x0102_0304_0506_0708,
+            data: b"payload".to_vec(),
+        };
+        let mut encoder = Encoder::new(64);
+        encode_operation(&mut encoder, &notify);
+        let bytes = encoder.finish().expect("notify descriptor");
+        assert_eq!(&bytes[6..14], &[8, 7, 6, 5, 4, 3, 2, 1]);
+        assert!(!notify.is_mutation());
     }
 
     #[test]

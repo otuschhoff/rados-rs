@@ -3,8 +3,10 @@
 pub(crate) mod backoff;
 mod client;
 pub(crate) mod enumeration;
+pub(crate) mod lock;
 pub(crate) mod messages;
 pub(crate) mod metadata;
+pub(crate) mod watch;
 
 pub(crate) use backoff::{HObject, compare_hobject};
 #[cfg(feature = "r08-integration")]

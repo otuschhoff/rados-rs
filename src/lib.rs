@@ -35,6 +35,9 @@ pub mod r08_integration;
 #[cfg(all(feature = "r09-integration", not(rados_packaged_source)))]
 #[doc(hidden)]
 pub mod r09_integration;
+#[cfg(all(feature = "r10-integration", not(rados_packaged_source)))]
+#[doc(hidden)]
+pub mod r10_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool, compare_object_cursors};

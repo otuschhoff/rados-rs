@@ -55,6 +55,11 @@ impl EntityAddr {
         })
     }
 
+    pub(crate) fn with_nonce(mut self, nonce: u32) -> Self {
+        self.nonce = nonce;
+        self
+    }
+
     pub(crate) fn endpoint(&self) -> Option<SocketAddr> {
         let port = u16::from_be_bytes(self.socket_data.get(..2)?.try_into().ok()?);
         match self.family {
@@ -271,7 +276,7 @@ impl EntityAddrVec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{Ipv6Addr, SocketAddr};
+    use std::net::{Ipv6Addr, SocketAddr, SocketAddrV4};
 
     fn endpoint(address: &EntityAddr) -> Option<SocketAddr> {
         match address.family {
@@ -347,6 +352,22 @@ mod tests {
         assert_eq!(legacy, modern);
         legacy.nonce += 1;
         assert_ne!(legacy, modern);
+    }
+
+    #[test]
+    fn client_nonce_is_preserved_on_the_wire() {
+        let address =
+            EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))
+                .expect("address")
+                .with_nonce(0x1234_5678);
+        let mut encoder = Encoder::new(64);
+        address
+            .encode(&mut encoder, GlobalFeatures::MESSAGE_ADDRESS_V2)
+            .expect("encode address");
+        let wire = encoder.finish().expect("encoded address");
+        let decoded = EntityAddr::decode(&mut Decoder::new(&wire, 64)).expect("decoded address");
+        assert_eq!(decoded, address);
+        assert_eq!(decoded.nonce, 0x1234_5678);
     }
 
     #[test]

@@ -16,7 +16,7 @@ use crate::msgr::session::{Config as SessionConfig, Machine, ReconnectPolicy, Se
 use crate::msgr::supervisor::{Connector, Session};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
-use tokio::sync::{Mutex as AsyncMutex, oneshot, watch};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use super::backoff::{
@@ -28,6 +28,7 @@ use super::messages::{
     FLAG_RETURN_VECTOR, Limits, OP_FLAG_FAIL_OK, Operation, OperationResult, Reply, Request,
     decode_reply, encode_request,
 };
+use super::watch::{MESSAGE_WATCH_NOTIFY, Notification, decode_notification};
 
 const ENTITY_OSD: u8 = 4;
 const MAX_ATTEMPTS: usize = 3;
@@ -37,6 +38,7 @@ const TRANSIENT_REFRESH_WAIT: Duration = Duration::from_millis(250);
 const READ_REPLY_FRONT_BYTES: u64 = 144;
 const MAX_MUTATIONS: usize = 64;
 const MAX_MUTATION_BYTES: u64 = 64 * 32 * 1024 * 1024;
+const MAX_NOTIFICATION_QUEUE: usize = 65_536;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Target {
@@ -165,6 +167,9 @@ pub(crate) struct Client {
     next_transaction: AtomicU64,
     mutations: Mutex<MutationState>,
     mutation_changed: watch::Sender<u64>,
+    notifications: broadcast::Sender<Notification>,
+    watch_stop: watch::Sender<bool>,
+    watch_workers: Mutex<Vec<JoinHandle<()>>>,
     incarnation: AtomicI32,
     closed: AtomicBool,
     frame_limits: FrameLimits,
@@ -172,6 +177,7 @@ pub(crate) struct Client {
     dial_timeout: Duration,
     handshake_timeout: Duration,
     allow_crc: bool,
+    address_nonce: u32,
 }
 
 impl Client {
@@ -181,8 +187,11 @@ impl Client {
         dial_timeout: Duration,
         handshake_timeout: Duration,
         allow_crc: bool,
+        address_nonce: u32,
     ) -> Self {
         let (mutation_changed, _) = watch::channel(0);
+        let (notifications, _) = broadcast::channel(MAX_NOTIFICATION_QUEUE);
+        let (watch_stop, _) = watch::channel(false);
         Self {
             authority,
             sessions: Mutex::new(HashMap::new()),
@@ -190,6 +199,9 @@ impl Client {
             next_transaction: AtomicU64::new(1),
             mutations: Mutex::new(MutationState::default()),
             mutation_changed,
+            notifications,
+            watch_stop,
+            watch_workers: Mutex::new(Vec::new()),
             incarnation: AtomicI32::new(0),
             closed: AtomicBool::new(false),
             frame_limits,
@@ -200,6 +212,7 @@ impl Client {
             dial_timeout,
             handshake_timeout,
             allow_crc,
+            address_nonce,
         }
     }
 
@@ -311,7 +324,7 @@ impl Client {
         if target.snapshot != super::messages::NO_SNAP
             || operations.is_empty()
             || operations.len() > self.message_limits.max_operations as usize
-            || !contains_mutation(&operations)
+            || !contains_outcome_sensitive(&operations)
         {
             return Err(Error::LimitExceeded);
         }
@@ -439,6 +452,27 @@ impl Client {
         }
     }
 
+    pub(crate) fn notifications(&self) -> broadcast::Receiver<Notification> {
+        self.notifications.subscribe()
+    }
+
+    pub(crate) fn watch_stop(&self) -> watch::Receiver<bool> {
+        self.watch_stop.subscribe()
+    }
+
+    pub(crate) fn track_watch_worker(&self, worker: JoinHandle<()>) -> Result<(), JoinHandle<()>> {
+        let mut workers = self
+            .watch_workers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.closed.load(Ordering::Acquire) {
+            return Err(worker);
+        }
+        workers.retain(|worker| !worker.is_finished());
+        workers.push(worker);
+        Ok(())
+    }
+
     pub(crate) fn begin_shutdown(&self) {
         let mut state = self
             .mutations
@@ -528,6 +562,8 @@ impl Client {
         options: &OperationOptions,
     ) -> Result<CompoundResult, Error> {
         let client_incarnation = self.client_incarnation()?;
+        let retry_unknown = operations.iter().all(allows_unknown_retry);
+        let durable = contains_durable_mutation(&operations);
         let route_hash = operations.first().and_then(Operation::route_hash);
         if operations
             .iter()
@@ -638,14 +674,15 @@ impl Client {
                     }
                     if let Error::OutcomeUnknown(cause) = error {
                         prior_unknown = Some(prior_unknown.unwrap_or(cause));
-                        if wait_for_primary_change(
-                            monitor,
-                            &target,
-                            placement.acting_primary,
-                            map.epoch(),
-                            options,
-                        )
-                        .await
+                        if retry_unknown
+                            && wait_for_primary_change(
+                                monitor,
+                                &target,
+                                placement.acting_primary,
+                                map.epoch(),
+                                options,
+                            )
+                            .await
                         {
                             continue;
                         }
@@ -716,7 +753,7 @@ impl Client {
                 }
                 continue;
             }
-            if mutation && validate_durable_reply(&reply).is_err() {
+            if durable && validate_durable_reply(&reply).is_err() {
                 self.invalidate(placement.acting_primary, &session);
                 return Err(Error::OutcomeUnknown(UnknownCause::Transport));
             }
@@ -827,7 +864,8 @@ impl Client {
         });
         let placeholder =
             EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))
-                .map_err(|_| Error::NotConnected)?;
+                .map_err(|_| Error::NotConnected)?
+                .with_nonce(self.address_nonce);
         let machine = Machine::new(SessionConfig {
             limits: self.frame_limits,
             max_queued_messages: 16,
@@ -859,6 +897,7 @@ impl Client {
         .map_err(map_session_error)?;
         Ok(OSDSession::spawn(
             Arc::new(Session::spawn(machine, None, Some(connector))),
+            self.notifications.clone(),
             self.message_limits,
             self.handshake_timeout,
         ))
@@ -897,6 +936,7 @@ impl Client {
     pub(crate) fn close(&self) {
         self.begin_shutdown();
         self.closed.store(true, Ordering::Release);
+        self.watch_stop.send_replace(true);
         let sessions = self
             .sessions
             .lock()
@@ -941,6 +981,11 @@ impl Client {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_empty()
+            || !self
+                .watch_workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty()
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -963,6 +1008,15 @@ impl Client {
         for session in sessions.iter().chain(&retired) {
             session.shutdown().await;
         }
+        let workers = std::mem::take(
+            &mut *self
+                .watch_workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for worker in workers {
+            let _ = worker.await;
+        }
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -975,7 +1029,12 @@ impl Client {
 }
 
 impl OSDSession {
-    fn spawn(raw: Arc<Session>, limits: Limits, ack_timeout: Duration) -> Arc<Self> {
+    fn spawn(
+        raw: Arc<Session>,
+        notifications: broadcast::Sender<Notification>,
+        limits: Limits,
+        ack_timeout: Duration,
+    ) -> Arc<Self> {
         let state = Arc::new(AsyncMutex::new(OSDSessionState::default()));
         let (changed, _) = watch::channel(0);
         let session = Arc::new(Self {
@@ -985,7 +1044,14 @@ impl OSDSession {
             owner: AsyncMutex::new(None),
             limits,
         });
-        let owner = tokio::spawn(run_incoming(raw, state, changed, limits, ack_timeout));
+        let owner = tokio::spawn(run_incoming(
+            raw,
+            state,
+            changed,
+            notifications,
+            limits,
+            ack_timeout,
+        ));
         *session.owner.try_lock().expect("new OSD owner lock") = Some(owner);
         session
     }
@@ -1076,19 +1142,42 @@ async fn run_incoming(
     raw: Arc<Session>,
     state: Arc<AsyncMutex<OSDSessionState>>,
     changed: watch::Sender<u64>,
+    notifications: broadcast::Sender<Notification>,
     limits: Limits,
     ack_timeout: Duration,
 ) {
     while let Some(message) = raw.next_incoming().await {
         if message.header.message_type == 41 {
-            fail_session(&raw, &state, &changed, Error::NotConnected).await;
+            fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
             return;
+        }
+        if message.header.message_type == MESSAGE_WATCH_NOTIFY {
+            let Ok(notification) = decode_notification(&message, limits.max_bytes as usize) else {
+                fail_session(
+                    &raw,
+                    &state,
+                    &changed,
+                    &notifications,
+                    Error::MalformedReply,
+                )
+                .await;
+                return;
+            };
+            let _ = notifications.send(notification);
+            continue;
         }
         if message.header.message_type != MESSAGE_OSD_BACKOFF {
             continue;
         }
         let Ok(backoff) = decode_backoff(&message, limits) else {
-            fail_session(&raw, &state, &changed, Error::MalformedReply).await;
+            fail_session(
+                &raw,
+                &state,
+                &changed,
+                &notifications,
+                Error::MalformedReply,
+            )
+            .await;
             return;
         };
         {
@@ -1107,7 +1196,14 @@ async fn run_incoming(
         }
         if backoff.operation == BACKOFF_BLOCK {
             let Ok(acknowledgment) = encode_acknowledgment(&backoff, limits) else {
-                fail_session(&raw, &state, &changed, Error::MalformedReply).await;
+                fail_session(
+                    &raw,
+                    &state,
+                    &changed,
+                    &notifications,
+                    Error::MalformedReply,
+                )
+                .await;
                 return;
             };
             let sent = tokio::time::timeout(ack_timeout, async {
@@ -1119,21 +1215,41 @@ async fn run_incoming(
             .await
             .unwrap_or(Err(SessionError::Disconnected));
             if sent.is_err() {
-                fail_session(&raw, &state, &changed, Error::NotConnected).await;
+                fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
                 return;
             }
         }
     }
-    fail_session(&raw, &state, &changed, Error::NotConnected).await;
+    fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
 }
 
 async fn fail_session(
     raw: &Session,
     state: &AsyncMutex<OSDSessionState>,
     changed: &watch::Sender<u64>,
+    notifications: &broadcast::Sender<Notification>,
     error: Error,
 ) {
-    state.lock().await.failure.get_or_insert(error);
+    let first_failure = {
+        let mut state = state.lock().await;
+        if state.failure.is_some() {
+            false
+        } else {
+            state.failure = Some(error);
+            true
+        }
+    };
+    if first_failure {
+        let _ = notifications.send(Notification {
+            cookie: 0,
+            version: 0,
+            notify_id: 0,
+            opcode: super::watch::EVENT_DISCONNECT,
+            data: Vec::new(),
+            result: 0,
+            notifier: 0,
+        });
+    }
     let revision = changed.borrow().wrapping_add(1);
     changed.send_replace(revision);
     raw.close();
@@ -1203,9 +1319,11 @@ async fn wait_for_request(
     loop {
         let cause = tokio::select! {
             result = request.wait_result() => {
-                return result
-                    .map_err(|error| map_request_error(error, mutation))?
-                    .ok_or(Error::MalformedReply);
+                return match result {
+                    Ok(Some(reply)) => Ok(reply),
+                    Ok(None) => Err(Error::MalformedReply),
+                    Err(error) => Err(map_request_error(error, mutation)),
+                };
             }
             () = &mut timeout => Some(UnknownCause::Timeout),
             () = &mut cancellation => {
@@ -1343,8 +1461,26 @@ fn validate_target(reply: &Reply, object: &[u8], pg: PG, attempt: usize) -> Resu
     Ok(())
 }
 
-fn contains_mutation(operations: &[Operation]) -> bool {
+fn contains_outcome_sensitive(operations: &[Operation]) -> bool {
+    operations.iter().any(|operation| match operation {
+        Operation::Notify { .. } | Operation::NotifyAck { .. } => true,
+        Operation::WithFlags { operation, .. } => {
+            contains_outcome_sensitive(std::slice::from_ref(operation))
+        }
+        _ => operation.is_mutation(),
+    })
+}
+
+fn contains_durable_mutation(operations: &[Operation]) -> bool {
     operations.iter().any(Operation::is_mutation)
+}
+
+fn allows_unknown_retry(operation: &Operation) -> bool {
+    match operation {
+        Operation::Call { .. } | Operation::Notify { .. } | Operation::NotifyAck { .. } => false,
+        Operation::WithFlags { operation, .. } => allows_unknown_retry(operation),
+        _ => true,
+    }
 }
 
 fn validate_operations(reply: &Reply, operations: &[Operation]) -> Result<(), Error> {
@@ -1678,7 +1814,7 @@ mod tests {
 
     #[test]
     fn comparisons_alone_are_not_a_mutation_compound() {
-        assert!(!contains_mutation(&[
+        assert!(!contains_outcome_sensitive(&[
             Operation::AssertVersion(7),
             Operation::CompareExtent {
                 offset: 0,
@@ -1686,10 +1822,97 @@ mod tests {
             },
             Operation::OmapCompare(vec![1, 2, 3]),
         ]));
-        assert!(contains_mutation(&[
+        assert!(contains_outcome_sensitive(&[
             Operation::AssertVersion(7),
             Operation::WriteFull(Vec::new()),
         ]));
+    }
+
+    #[test]
+    fn notify_operations_are_outcome_sensitive_without_wire_mutation_flags() {
+        let notify = Operation::Notify {
+            cookie: 1,
+            data: Vec::new(),
+        };
+        let acknowledgment = Operation::NotifyAck {
+            cookie: 1,
+            data: Vec::new(),
+        };
+        assert!(!notify.is_mutation());
+        assert!(!acknowledgment.is_mutation());
+        assert!(contains_outcome_sensitive(std::slice::from_ref(&notify)));
+        assert!(contains_outcome_sensitive(std::slice::from_ref(
+            &acknowledgment
+        )));
+        assert!(!allows_unknown_retry(&notify));
+        assert!(!allows_unknown_retry(&acknowledgment));
+        assert!(!contains_durable_mutation(&[notify, acknowledgment]));
+    }
+
+    #[tokio::test]
+    async fn closed_client_rejects_late_watch_worker_tracking() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+            1,
+        );
+        client.close();
+        let worker = tokio::spawn(std::future::pending());
+        let worker = client
+            .track_watch_worker(worker)
+            .expect_err("closed client accepted worker");
+        worker.abort();
+        let _ = worker.await;
+        assert!(!client.has_sessions());
+    }
+
+    #[tokio::test]
+    async fn watch_worker_tracking_reclaims_completed_handles() {
+        let client = Client::new(
+            Arc::new(RwLock::new(None)),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            false,
+            1,
+        );
+        client
+            .track_watch_worker(tokio::spawn(async {}))
+            .expect("track completed worker");
+        tokio::task::yield_now().await;
+        let pending = tokio::spawn(std::future::pending());
+        client
+            .track_watch_worker(pending)
+            .expect("track pending worker");
+        assert_eq!(
+            client
+                .watch_workers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
+        client.close();
+    }
+
+    #[test]
+    fn unknown_class_mutations_are_never_retryable() {
+        let call = Operation::Call {
+            class_length: 4,
+            method_length: 6,
+            input_length: 0,
+            data: b"classmethod".to_vec(),
+            mutation: true,
+        };
+        assert!(!allows_unknown_retry(&call));
+        assert!(!allows_unknown_retry(&Operation::WithFlags {
+            operation: Box::new(call),
+            flags: 0,
+        }));
+        assert!(allows_unknown_retry(&Operation::WriteFull(Vec::new())));
     }
 
     fn request_message() -> Message {
@@ -1736,6 +1959,7 @@ mod tests {
         let (client, mut server) = duplex(8192);
         let session = OSDSession::spawn(
             raw_session(client),
+            broadcast::channel(4).0,
             MESSAGE_TEST_LIMITS,
             Duration::from_secs(1),
         );
@@ -1797,6 +2021,7 @@ mod tests {
         let (client, mut server) = duplex(64);
         let session = OSDSession::spawn(
             raw_session(client),
+            broadcast::channel(4).0,
             MESSAGE_TEST_LIMITS,
             Duration::from_millis(20),
         );
@@ -1829,6 +2054,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         );
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -1857,6 +2083,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         ));
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -1879,6 +2106,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         );
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -1907,6 +2135,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         );
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -1962,6 +2191,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         ));
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -1990,6 +2220,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         ));
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
@@ -2024,6 +2255,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             false,
+            1,
         );
         let options = OperationOptions::new()
             .with_deadline(std::time::Instant::now() + Duration::from_secs(1));

@@ -1,3 +1,4 @@
+use crate::client::WatchInner;
 use crate::{Error, ErrorKind, Result};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -235,7 +236,7 @@ pub struct NotifyTimeout {
 }
 
 /// A notify result preserving acknowledgments and timeouts separately.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NotifyReply {
     pub acknowledged: Vec<NotifyAcknowledgment>,
     pub timed_out: Vec<NotifyTimeout>,
@@ -248,14 +249,7 @@ pub const MAX_WATCH_QUEUE: u32 = 65_536;
 #[derive(Debug)]
 pub struct Watch {
     pub(crate) cookie: u64,
-}
-
-impl Watch {
-    /// Returns the server-assigned watch cookie.
-    #[must_use]
-    pub const fn cookie(&self) -> u64 {
-        self.cookie
-    }
+    pub(crate) inner: Arc<WatchInner>,
 }
 
 /// One active watcher.
@@ -275,7 +269,7 @@ pub enum LockMode {
 }
 
 /// Lock acquisition options.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LockOptions {
     pub cookie: String,
     pub tag: String,

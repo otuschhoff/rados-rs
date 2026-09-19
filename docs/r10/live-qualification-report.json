@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "suite_id": "r10/classes-locks-watches-v1",
+  "status": "passed",
+  "started_at": "2026-09-19T20:42:46Z",
+  "finished_at": "2026-09-19T20:45:53Z",
+  "schema_sha256": "e7874748449db4ada3982bb12ec5a172b8cfae4c7a3ea3a2c3635dd38b36295b",
+  "rust": {
+    "revision": "fb3f8c7df1d9d9571ea7c6533cc30e7031672cfd",
+    "tree": "b205bd5fd7069205f1b23df1237d0f5d845f6f0f",
+    "source_sha256": "0cf97dfc4645cda62706a25e852d2d36ed61f7b7fb8da25a4c8f5054b5a424ef",
+    "compiler_image": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922",
+    "platform": "linux/arm64",
+    "binary_sha256": "53c132bf34b41046b2fc128dc4c70f2abab6910119ac3e9ac12750af202385ff"
+  },
+  "go": {
+    "revision": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+    "tree": "c5039b6b50a05b942a902f70dc2fcb090463e8c7",
+    "compiler": "go1.26.8",
+    "platform": "linux/arm64",
+    "p09_driver_sha256": "e55b5a5cc3127575cb2fd633f92ee286e06d6d70157c753a3db926f002822271",
+    "focused_tests": "passed"
+  },
+  "native": {
+    "version": "librados2-20.2.4-0.el9",
+    "binary_sha256": "0b5a436a71b98ae4e7a958222259f1ebc87cddd18f66a08acc5a91ff2c0d2341",
+    "seed": {
+      "native_exec": true,
+      "native_exec_result": 10,
+      "native_exec_output": "01010400000000000000",
+      "native_lock_seed": true,
+      "native_lock_renew": true,
+      "native_lock_release": true,
+      "native_lock_expiry": true
+    },
+    "watch": {
+      "go_notify_native_watch": true,
+      "native_watch_remap": true,
+      "native_watch_restart": true,
+      "native_watch_same_cookie": true,
+      "native_watch_exactly_once": true,
+      "native_lock_shared": true,
+      "native_shared_release": true
+    },
+    "notify": {
+      "native_notify_go_watch": true
+    },
+    "verify": {
+      "go_lock_native_read": true,
+      "native_break_go_lock": true
+    }
+  },
+  "server": {
+    "source_anchor_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "image": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa",
+    "binary_sha256": "5fbad656b7f1bd900a0c40990a81be8dff523555ed0b2c957e38f29beb33608a"
+  },
+  "cluster": {
+    "fsid": "11111111-2222-4333-8444-101010101010",
+    "osds": 3,
+    "pool": "p10-data",
+    "replicas": 2
+  },
+  "probe": {
+    "class_execution": true,
+    "lock_contention": true,
+    "lock_renew": true,
+    "lock_break": true,
+    "lock_shared": true,
+    "lock_expiry": true,
+    "watch_ack": true,
+    "notify_timeout": true,
+    "native_locks": true,
+    "native_watch": true,
+    "native_notify": true,
+    "watch_remap": true,
+    "osd_restart": true,
+    "explicit_unregister": true,
+    "watch_shutdown": true,
+    "client_shutdown": true
+  },
+  "scenarios": {
+    "class_execution": "passed",
+    "lock_interoperability": "passed",
+    "lock_lease_lifecycle": "passed",
+    "watch_notify_interoperability": "passed",
+    "partial_timeout_results": "passed",
+    "remap_reregistration": "passed",
+    "osd_restart": "passed",
+    "explicit_unregister": "passed",
+    "lost_watch_observability": "passed",
+    "bounded_shutdown": "passed"
+  },
+  "deviations": {
+    "notify_outcome_shape": "Rust returns (NotifyReply, Result<()>) so partial timeout data and the server error remain simultaneously observable; frozen Go returns (NotifyReply, error).",
+    "notification_dispatch": "Rust uses a bounded client-wide broadcast and terminates a lagging watch observably; frozen Go routes by cookie into per-watch queues.",
+    "ambiguous_coordination_replay": "Rust does not replay class, lock, notify, or acknowledgment operations after an ambiguous transport outcome and returns OutcomeUnknown; frozen Go may retry outcome-sensitive operations after a primary change with the same transaction identity."
+  }
+}

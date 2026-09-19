@@ -14,6 +14,7 @@ enum ReadAction {
     GetXattr(Vec<u8>),
     GetOmapHeader,
     ListOmap(Vec<u8>),
+    Exec(Operation),
     WithFlags { action: Box<Self>, flags: u32 },
 }
 
@@ -113,6 +114,26 @@ impl ReadOp {
         self.push(ReadAction::ListOmap(payload))
     }
 
+    /// Appends a read-class method call with copied input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for invalid names, retained-byte limits, or operation overflow.
+    pub fn exec(
+        self,
+        class: impl AsRef<[u8]>,
+        method: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+    ) -> Result<Self> {
+        self.push(ReadAction::Exec(class_operation(
+            class.as_ref(),
+            method.as_ref(),
+            input.as_ref(),
+            false,
+            "ReadOp::exec",
+        )?))
+    }
+
     /// Applies flags to an existing sub-operation by its zero-based result index.
     ///
     /// # Errors
@@ -163,6 +184,7 @@ enum WriteAction {
     ClearOmap,
     SetOmapHeader(Vec<u8>),
     CompareOmap(Vec<u8>),
+    Exec(Operation),
     WithFlags { action: Box<Self>, flags: u32 },
 }
 
@@ -407,6 +429,28 @@ impl WriteOp {
         self.push(WriteAction::CompareOmap(payload), retained)
     }
 
+    /// Appends a potentially mutating class method call with copied input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for invalid names, retained-byte limits, or operation overflow.
+    pub fn exec(
+        self,
+        class: impl AsRef<[u8]>,
+        method: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+    ) -> Result<Self> {
+        let operation = class_operation(
+            class.as_ref(),
+            method.as_ref(),
+            input.as_ref(),
+            true,
+            "WriteOp::exec",
+        )?;
+        let retained = operation.data_len();
+        self.push(WriteAction::Exec(operation), retained)
+    }
+
     /// Applies flags to an existing sub-operation by its zero-based result index.
     ///
     /// # Errors
@@ -445,6 +489,45 @@ fn valid_xattr_name(name: &[u8], operation: &'static str) -> Result<Vec<u8>> {
     Ok(name.to_vec())
 }
 
+fn class_operation(
+    class: &[u8],
+    method: &[u8],
+    input: &[u8],
+    mutation: bool,
+    operation: &'static str,
+) -> Result<Operation> {
+    let retained = class
+        .len()
+        .checked_add(method.len())
+        .and_then(|length| length.checked_add(input.len()))
+        .ok_or_else(|| Error::invalid(operation))?;
+    if class.is_empty()
+        || method.is_empty()
+        || class.contains(&0)
+        || method.contains(&0)
+        || class.len() > u8::MAX as usize
+        || method.len() > u8::MAX as usize
+        || input.len() > u32::MAX as usize
+        || retained > MAX_OPERATION_BYTES
+    {
+        return Err(Error::invalid(operation));
+    }
+    let class_length = u8::try_from(class.len()).map_err(|_| Error::invalid(operation))?;
+    let method_length = u8::try_from(method.len()).map_err(|_| Error::invalid(operation))?;
+    let input_length = u32::try_from(input.len()).map_err(|_| Error::invalid(operation))?;
+    let mut data = Vec::with_capacity(retained);
+    data.extend_from_slice(class);
+    data.extend_from_slice(method);
+    data.extend_from_slice(input);
+    Ok(Operation::Call {
+        class_length,
+        method_length,
+        input_length,
+        data,
+        mutation,
+    })
+}
+
 fn read_operation(action: ReadAction) -> Operation {
     match action {
         ReadAction::Read { offset, length } => Operation::Read { offset, length },
@@ -453,6 +536,7 @@ fn read_operation(action: ReadAction) -> Operation {
         ReadAction::GetXattr(name) => Operation::GetXattr(name),
         ReadAction::GetOmapHeader => Operation::OmapGetHeader,
         ReadAction::ListOmap(payload) => Operation::OmapGetValues(payload),
+        ReadAction::Exec(operation) => operation,
         ReadAction::WithFlags { action, flags } => Operation::WithFlags {
             operation: Box::new(read_operation(*action)),
             flags,
@@ -479,6 +563,7 @@ fn write_operation(action: WriteAction) -> Operation {
         WriteAction::ClearOmap => Operation::OmapClear,
         WriteAction::SetOmapHeader(value) => Operation::OmapSetHeader(value),
         WriteAction::CompareOmap(payload) => Operation::OmapCompare(payload),
+        WriteAction::Exec(operation) => operation,
         WriteAction::WithFlags { action, flags } => Operation::WithFlags {
             operation: Box::new(write_operation(*action)),
             flags,
@@ -563,5 +648,28 @@ mod tests {
             [Operation::WithFlags { operation, flags }]
                 if **operation == Operation::Create { exclusive: true } && *flags == 0
         ));
+    }
+
+    #[test]
+    fn class_builders_copy_and_validate_names_and_mutation_intent() {
+        let mut input = b"input".to_vec();
+        let read = ReadOp::new()
+            .exec(b"class", b"method", &input)
+            .expect("read class")
+            .into_operations()
+            .expect("operations");
+        input.fill(b'x');
+        assert!(matches!(
+            read.as_slice(),
+            [Operation::Call { data, mutation: false, .. }] if data == b"classmethodinput"
+        ));
+        let write = WriteOp::new()
+            .exec(b"class", b"method", b"input")
+            .expect("write class")
+            .into_operations()
+            .expect("operations");
+        assert!(write[0].is_mutation());
+        assert!(ReadOp::new().exec([], b"method", []).is_err());
+        assert!(WriteOp::new().exec(b"class", b"bad\0name", []).is_err());
     }
 }

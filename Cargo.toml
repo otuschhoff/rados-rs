@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09", "tools/r10"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -31,12 +31,16 @@ include = [
     "!/src/r07_integration.rs",
     "!/src/r08_integration.rs",
     "!/src/r09_integration.rs",
+    "!/src/r10_integration.rs",
     "!/tools/r08/**",
     "!/integration/r08/**",
     "!/docs/r08/**",
     "!/tools/r09/**",
     "!/integration/r09/**",
     "!/docs/r09/**",
+    "!/tools/r10/**",
+    "!/integration/r10/**",
+    "!/docs/r10/**",
     "/examples/**",
     "/docs/RUST_PORT_SPEC.md",
     "/docs/decisions/**",
@@ -86,6 +90,7 @@ r06-integration = []
 r07-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
 r08-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
 r09-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
+r10-integration = []
 
 [[bin]]
 name = "rados-r04-live"
