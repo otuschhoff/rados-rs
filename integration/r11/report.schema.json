@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "suite_id", "status", "started_at", "finished_at", "schema_sha256", "rust", "go", "native", "server", "cluster", "probe", "scenarios", "deviations"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite_id": { "const": "r11/snapshots-specialized-ec-v1" },
+    "status": { "const": "passed" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "schema_sha256": { "$ref": "#/$defs/sha256" },
+    "rust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/git" }, "tree": { "$ref": "#/$defs/git" }, "source_sha256": { "$ref": "#/$defs/sha256" },
+        "compiler_image": { "const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922" },
+        "platform": { "enum": ["linux/amd64", "linux/arm64"] }, "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "go": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "tree", "compiler", "platform", "p10_driver_sha256", "focused_tests"],
+      "properties": {
+        "revision": { "const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4" }, "tree": { "const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7" },
+        "compiler": { "const": "go1.26.8" }, "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+        "p10_driver_sha256": { "$ref": "#/$defs/sha256" }, "focused_tests": { "const": "passed" }
+      }
+    },
+    "native": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "binary_sha256", "seed", "verify"],
+      "properties": {
+        "version": { "const": "librados2-20.2.4-0.el9" }, "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "seed": { "$ref": "#/$defs/native_seed" }, "verify": { "$ref": "#/$defs/native_verify" }
+      }
+    },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": { "const": "7f793731f1b39eb4f465e960113d2363c311b964" },
+        "version": { "const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)" },
+        "image": { "const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cluster": { "$ref": "#/$defs/cluster" },
+    "probe": { "$ref": "#/$defs/probe" },
+    "scenarios": { "$ref": "#/$defs/scenarios" },
+    "deviations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["snapshot_views", "uncertain_monitor_mutations", "non_frozen_variants"],
+      "properties": {
+        "snapshot_views": { "type": "string", "minLength": 1 },
+        "uncertain_monitor_mutations": { "type": "string", "minLength": 1 },
+        "non_frozen_variants": { "type": "array", "minItems": 10, "maxItems": 10, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "git": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "replicated_pool": {
+      "type": "object", "additionalProperties": false, "required": ["name", "size", "min_size", "pg_num"],
+      "properties": { "name": { "enum": ["p11-named", "p11-self"] }, "size": { "const": 2 }, "min_size": { "const": 1 }, "pg_num": { "const": 16 } }
+    },
+    "cluster": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fsid", "osds", "objectstore", "named_pool", "self_managed_pool", "ec_pool"],
+      "properties": {
+        "fsid": { "const": "21111111-2222-4333-8444-111111111111" }, "osds": { "const": 3 }, "objectstore": { "const": "bluestore" },
+        "named_pool": { "$ref": "#/$defs/replicated_pool" }, "self_managed_pool": { "$ref": "#/$defs/replicated_pool" },
+        "ec_pool": {
+          "type": "object", "additionalProperties": false,
+          "required": ["name", "size", "min_size", "pg_num", "plugin", "k", "m", "failure_domain", "allow_ec_overwrites", "stripe_unit", "stripe_width"],
+          "properties": {
+            "name": { "const": "p11-ec" }, "size": { "const": 3 }, "min_size": { "const": 2 }, "pg_num": { "const": 16 },
+            "plugin": { "const": "jerasure" }, "k": { "const": 2 }, "m": { "const": 1 }, "failure_domain": { "const": "osd" },
+            "allow_ec_overwrites": { "const": false }, "stripe_unit": { "const": 4096 }, "stripe_width": { "const": 8192 }
+          }
+        }
+      }
+    },
+    "probe": {
+      "type": "object", "additionalProperties": false,
+      "required": ["named_create_list_lookup", "named_read_snapshot", "named_rollback", "named_remove", "self_managed_create", "self_managed_write_context", "self_managed_read", "self_managed_rollback", "self_managed_remove", "snapshot_context_validation", "write_same", "checksum", "checksum_hex", "allocation_hint", "sparse_read", "copy_from", "copy_from2", "replicated_capabilities", "ec_capabilities", "ec_write_read", "ec_overwrite_rejected", "ec_write_same_rejected", "ec_checksum", "ec_allocation_hint", "ec_sparse_read", "ec_copy_from", "ec_omap_rejected", "ec_alignment_evidence", "native_seed_read", "required_alignment"],
+      "properties": {
+        "named_create_list_lookup": { "const": true }, "named_read_snapshot": { "const": true }, "named_rollback": { "const": true }, "named_remove": { "const": true },
+        "self_managed_create": { "const": true }, "self_managed_write_context": { "const": true }, "self_managed_read": { "const": true }, "self_managed_rollback": { "const": true }, "self_managed_remove": { "const": true }, "snapshot_context_validation": { "const": true },
+        "write_same": { "const": true }, "checksum": { "const": true }, "checksum_hex": { "const": "02000000f5be862af5be862a" }, "allocation_hint": { "const": true }, "sparse_read": { "const": true }, "copy_from": { "const": true }, "copy_from2": { "const": true },
+        "replicated_capabilities": { "const": true }, "ec_capabilities": { "const": true }, "ec_write_read": { "const": true }, "ec_overwrite_rejected": { "const": true }, "ec_write_same_rejected": { "const": true }, "ec_checksum": { "const": true }, "ec_allocation_hint": { "const": true }, "ec_sparse_read": { "const": true }, "ec_copy_from": { "const": true }, "ec_omap_rejected": { "const": true }, "ec_alignment_evidence": { "const": true }, "native_seed_read": { "const": true }, "required_alignment": { "const": 8192 }
+      }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["named_snapshots", "self_managed_snapshots", "snapshot_context_validation", "specialized_io", "erasure_coded_io", "native_interoperability"],
+      "properties": { "named_snapshots": { "const": "passed" }, "self_managed_snapshots": { "const": "passed" }, "snapshot_context_validation": { "const": "passed" }, "specialized_io": { "const": "passed" }, "erasure_coded_io": { "const": "passed" }, "native_interoperability": { "const": "passed" } }
+    },
+    "native_seed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["named_create_list_lookup_name_stamp", "named_read_rollback_remove", "self_managed_create_write_read_rollback_remove"],
+      "properties": { "named_create_list_lookup_name_stamp": { "const": true }, "named_read_rollback_remove": { "const": true }, "self_managed_create_write_read_rollback_remove": { "const": true } }
+    },
+    "native_verify": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rust_named_snapshot", "rust_named_head", "rust_copy", "rust_copy_from2", "rust_ec_copy", "rust_checksum_hex"],
+      "properties": { "rust_named_snapshot": { "const": true }, "rust_named_head": { "const": true }, "rust_copy": { "const": true }, "rust_copy_from2": { "const": true }, "rust_ec_copy": { "const": true }, "rust_checksum_hex": { "const": "02000000f5be862af5be862a" } }
+    }
+  }
+}

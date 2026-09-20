@@ -6,9 +6,10 @@ R02 API contracts and bounded wire types are complete. R03 private messenger
 codecs, session state and committed-tree differential verification are complete;
 R04 CephX authentication and secure monitor sessions, R05 configuration/maps,
 R06 exact placement, R07 read-only object I/O, R08 mutation qualification and
-R09 metadata, atomic builders and enumeration, and R10 classes, locks and
-watches are complete. R10 has fresh Rust/Go/native evidence against the pinned
-Ceph 20.2.4 replicated profile.
+R09 metadata, atomic builders and enumeration, R10 classes, locks and watches,
+and R11 snapshots and specialized object I/O are complete. R11 has fresh
+Rust/Go/native evidence against pinned Ceph 20.2.4 replicated and
+erasure-coded profiles.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -38,6 +39,12 @@ watch/notify coordination. The live gate passed native interoperability,
 partial notify timeout preservation, remap and OSD-restart recovery, observable
 watch loss, and bounded shutdown on the pinned three-OSD replicated profile.
 
+The R11 API scope adds named and self-managed snapshots through immutable pool
+views, rollback, sparse reads, checksums, writesame, allocation hints, copy
+operations, and pool erasure/alignment capabilities. The live gate passed
+native interoperability and the qualified replicated/erasure-coded operation
+matrix on a pinned three-OSD profile.
+
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
 
@@ -61,6 +68,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R08 mutation qualification status](docs/r08/STATUS.md)
 - [R09 metadata, compound and enumeration status](docs/r09/STATUS.md)
 - [R10 classes, locks and watches status](docs/r10/STATUS.md)
+- [R11 snapshots and specialized I/O status](docs/r11/STATUS.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)

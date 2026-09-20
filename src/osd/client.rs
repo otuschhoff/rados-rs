@@ -47,6 +47,8 @@ pub(crate) struct Target {
     pub(crate) locator: Vec<u8>,
     pub(crate) namespace: Vec<u8>,
     pub(crate) snapshot: u64,
+    pub(crate) snapshot_sequence: u64,
+    pub(crate) write_snapshots: Vec<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -274,6 +276,8 @@ impl Client {
                     locator: Vec::new(),
                     namespace,
                     snapshot: super::messages::NO_SNAP,
+                    snapshot_sequence: 0,
+                    write_snapshots: Vec::new(),
                 },
                 vec![operation],
                 options,
@@ -561,6 +565,10 @@ impl Client {
         mutation: bool,
         options: &OperationOptions,
     ) -> Result<CompoundResult, Error> {
+        if !mutation {
+            target.snapshot_sequence = 0;
+            target.write_snapshots.clear();
+        }
         let client_incarnation = self.client_incarnation()?;
         let retry_unknown = operations.iter().all(allows_unknown_retry);
         let durable = contains_durable_mutation(&operations);
@@ -631,6 +639,8 @@ impl Client {
                     locator: &target.locator,
                     namespace: &target.namespace,
                     snapshot: target.snapshot,
+                    snapshot_sequence: target.snapshot_sequence,
+                    write_snapshots: &target.write_snapshots,
                     transaction_id,
                     client_global_id: global_id,
                     client_incarnation,
@@ -1689,6 +1699,26 @@ mod tests {
     };
     const TEST_OSD_OP: u16 = 42;
     const TEST_OSD_OP_REPLY: u16 = 43;
+
+    #[test]
+    fn read_target_keeps_read_snapshot_but_drops_write_context() {
+        let mut target = Target {
+            pool_id: 1,
+            object: b"object".to_vec(),
+            locator: Vec::new(),
+            namespace: Vec::new(),
+            snapshot: 7,
+            snapshot_sequence: 9,
+            write_snapshots: vec![9, 7],
+        };
+
+        target.snapshot_sequence = 0;
+        target.write_snapshots.clear();
+
+        assert_eq!(target.snapshot, 7);
+        assert_eq!(target.snapshot_sequence, 0);
+        assert!(target.write_snapshots.is_empty());
+    }
 
     fn address() -> EntityAddr {
         EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(

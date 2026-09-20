@@ -5,6 +5,7 @@ use crate::mon::client::{
     MonitorClient, MonitorConfig, MonitorError, SessionFactory, authenticated_session_factory,
 };
 use crate::mon::messages::MessageLimits;
+use crate::mon::messages::{PoolOperation, PoolOperationReply, decode_allocated_snapshot_id};
 use crate::mon::seeds::{SeedError, SeedLimits, resolve_seeds};
 use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
@@ -17,10 +18,11 @@ use crate::osd::{lock, metadata, watch as osd_watch};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    ClassResult, Config, Error, ErrorKind, LocatorKey, LockMode, LockOptions, Locker, Namespace,
-    NotifyAcknowledgment, NotifyReply, NotifyTimeout, ObjectEntry, ObjectInfo, ObjectName,
-    ObjectPage, OmapEntry, OpResult, OperationOptions, Page, ReadOp, Result, SecurityMode,
-    SubOperationResult, Watch, WatchEvent, Watcher, WriteOp, Xattr,
+    ChecksumType, ClassResult, Config, Error, ErrorKind, LocatorKey, LockMode, LockOptions, Locker,
+    Namespace, NotifyAcknowledgment, NotifyReply, NotifyTimeout, ObjectEntry, ObjectInfo,
+    ObjectName, ObjectPage, OmapEntry, OpResult, OperationOptions, Page, ReadOp, Result,
+    SecurityMode, Snapshot, SnapshotContext, SparseExtent, SubOperationResult, Watch, WatchEvent,
+    Watcher, WriteOp, Xattr,
 };
 use std::cmp::Ordering as CmpOrdering;
 use std::fmt;
@@ -294,6 +296,9 @@ impl Client {
             namespace: Namespace::new([])?,
             locator: LocatorKey::new([])?,
             read_snapshot: None,
+            write_snapshot_sequence: 0,
+            write_snapshots: Vec::new(),
+            write_snapshot_valid: true,
         })
     }
 
@@ -417,6 +422,9 @@ impl Client {
             namespace: Namespace::new([])?,
             locator: LocatorKey::new([])?,
             read_snapshot: None,
+            write_snapshot_sequence: 0,
+            write_snapshots: Vec::new(),
+            write_snapshot_valid: true,
         })
     }
 
@@ -592,6 +600,9 @@ pub struct Pool {
     namespace: Namespace,
     locator: LocatorKey,
     read_snapshot: Option<u64>,
+    write_snapshot_sequence: u64,
+    write_snapshots: Vec<u64>,
+    write_snapshot_valid: bool,
 }
 
 impl Pool {
@@ -625,6 +636,224 @@ impl Pool {
     pub const fn with_read_snapshot(mut self, snapshot: u64) -> Self {
         self.read_snapshot = Some(snapshot);
         self
+    }
+
+    /// Returns a sibling view with an owned self-managed snapshot write context.
+    #[must_use]
+    pub fn with_write_snapshot(mut self, context: SnapshotContext) -> Self {
+        self.write_snapshot_valid = valid_snapshot_context(&context);
+        self.write_snapshot_sequence = context.sequence;
+        self.write_snapshots = context.snapshots;
+        self
+    }
+
+    /// Creates a named pool snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn create_snapshot(&self, name: &str, options: OperationOptions) -> Result<()> {
+        if name.is_empty() {
+            return Err(Error::invalid("Pool::create_snapshot"));
+        }
+        self.apply_snapshot_operation(
+            PoolOperation::Create,
+            0,
+            name,
+            options,
+            "Pool::create_snapshot",
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Removes a named pool snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn remove_snapshot(&self, name: &str, options: OperationOptions) -> Result<()> {
+        if name.is_empty() {
+            return Err(Error::invalid("Pool::remove_snapshot"));
+        }
+        self.apply_snapshot_operation(
+            PoolOperation::Delete,
+            0,
+            name,
+            options,
+            "Pool::remove_snapshot",
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Allocates a self-managed snapshot ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns monitor identity, transport, deadline, cancellation, malformed-reply, or Ceph errors.
+    pub async fn create_self_managed_snapshot(&self, options: OperationOptions) -> Result<u64> {
+        let operation = "Pool::create_self_managed_snapshot";
+        let reply = self
+            .apply_snapshot_operation(PoolOperation::CreateSelfManaged, 0, "", options, operation)
+            .await?;
+        decode_allocated_snapshot_id(&reply.response_data, 8)
+            .map_err(|_| Error::new(ErrorKind::NotConnected).with_operation(operation))
+    }
+
+    /// Removes a self-managed snapshot ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn remove_self_managed_snapshot(
+        &self,
+        snapshot: u64,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let operation = "Pool::remove_self_managed_snapshot";
+        if snapshot == 0 {
+            return Err(Error::invalid(operation));
+        }
+        self.apply_snapshot_operation(
+            PoolOperation::DeleteSelfManaged,
+            snapshot,
+            "",
+            options,
+            operation,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Returns named snapshots from the current pool map in snapshot-ID order.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn list_snapshots(&self, options: OperationOptions) -> Result<Vec<Snapshot>> {
+        let pool = self.metadata(options, "Pool::list_snapshots")?;
+        Ok(pool
+            .snapshots()
+            .map(|snapshot| Snapshot {
+                id: snapshot.id,
+                name: snapshot.name.clone(),
+                created_at: UNIX_EPOCH
+                    + Duration::new(
+                        u64::from(snapshot.timestamp.seconds),
+                        snapshot.timestamp.nanoseconds,
+                    ),
+            })
+            .collect())
+    }
+
+    /// Looks up one named snapshot in the current pool map.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, readiness, deadline, cancellation, missing-pool, or not-found errors.
+    pub fn lookup_snapshot(&self, name: &str, options: OperationOptions) -> Result<Snapshot> {
+        let operation = "Pool::lookup_snapshot";
+        if name.is_empty() {
+            return Err(Error::invalid(operation));
+        }
+        let pool = self.metadata(options, operation)?;
+        pool.snapshots()
+            .find(|snapshot| snapshot.name == name)
+            .map(|snapshot| Snapshot {
+                id: snapshot.id,
+                name: snapshot.name.clone(),
+                created_at: UNIX_EPOCH
+                    + Duration::new(
+                        u64::from(snapshot.timestamp.seconds),
+                        snapshot.timestamp.nanoseconds,
+                    ),
+            })
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))
+    }
+
+    /// Reports whether the pool uses self-managed snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn uses_self_managed_snapshots(&self, options: OperationOptions) -> Result<bool> {
+        Ok(self
+            .metadata(options, "Pool::uses_self_managed_snapshots")?
+            .uses_self_managed_snapshots())
+    }
+
+    /// Reports whether the pool is erasure coded.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn is_erasure_coded(&self, options: OperationOptions) -> Result<bool> {
+        Ok(self
+            .metadata(options, "Pool::is_erasure_coded")?
+            .is_erasure_coded())
+    }
+
+    /// Reports whether writes require pool stripe alignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn requires_alignment(&self, options: OperationOptions) -> Result<bool> {
+        Ok(self
+            .metadata(options, "Pool::requires_alignment")?
+            .requires_alignment())
+    }
+
+    /// Returns the pool stripe width reported by the current map.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn required_alignment(&self, options: OperationOptions) -> Result<u64> {
+        Ok(u64::from(
+            self.metadata(options, "Pool::required_alignment")?
+                .stripe_width(),
+        ))
+    }
+
+    async fn apply_snapshot_operation(
+        &self,
+        code: PoolOperation,
+        snapshot: u64,
+        name: &str,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<PoolOperationReply> {
+        let pool = u32::try_from(self.id.ok_or_else(|| Error::invalid(operation))?)
+            .map_err(|_| Error::invalid(operation))?;
+        let options =
+            bounded_options(options, self.client.0.config.operation_timeout(), operation)?;
+        self.client.ready(operation, &options)?;
+        let monitor = self.client.connected_monitor(operation)?;
+        monitor
+            .apply_pool_operation(pool, code, snapshot, name.to_owned(), options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))
+    }
+
+    fn metadata(
+        &self,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<crate::maps::Pool> {
+        let id = self.id.ok_or_else(|| Error::invalid(operation))?;
+        let options =
+            bounded_options(options, self.client.0.config.operation_timeout(), operation)?;
+        self.client.ready(operation, &options)?;
+        let monitor = self.client.connected_monitor(operation)?;
+        let state = monitor.snapshot();
+        let pool = state
+            .osdmap()
+            .and_then(|map| map.pool_by_id(id).cloned())
+            .filter(|pool| pool.name().as_bytes() == self.name.as_bytes())
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))?;
+        Ok(pool)
     }
 
     /// Returns an owned object view.
@@ -1147,6 +1376,9 @@ fn monitor_is_ready(monitor: &MonitorClient) -> bool {
 }
 
 fn map_monitor_error(error: MonitorError, operation: &'static str) -> Error {
+    if let MonitorError::WireErrno(code) = error {
+        return Error::from_wire(wire_error_kind(code), code).with_operation(operation);
+    }
     let kind = match error {
         MonitorError::Closed | MonitorError::Session(SessionError::Closed) => ErrorKind::Closed,
         MonitorError::InvalidConfig => ErrorKind::InvalidArgument,
@@ -1162,6 +1394,7 @@ fn map_monitor_error(error: MonitorError, operation: &'static str) -> Error {
         | MonitorError::Session(_)
         | MonitorError::Message(_)
         | MonitorError::Map(_) => ErrorKind::NotConnected,
+        MonitorError::WireErrno(_) => unreachable!(),
     };
     Error::new(kind).with_operation(operation)
 }
@@ -1522,6 +1755,103 @@ impl ObjectRef {
         ))
     }
 
+    /// Reads allocated extents in one bounded server request.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, malformed-reply, or Ceph errors.
+    pub async fn sparse_read(
+        &self,
+        offset: u64,
+        length: u64,
+        options: OperationOptions,
+    ) -> Result<(Vec<SparseExtent>, ObjectInfo)> {
+        let operation = "ObjectRef::sparse_read";
+        if length > i32::MAX as u64 || offset.checked_add(length).is_none() {
+            return Err(Error::invalid(operation));
+        }
+        let result = self
+            .execute_special_read(
+                OSDOperation::SparseRead { offset, length },
+                options,
+                operation,
+            )
+            .await?;
+        let item = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected(operation))?;
+        let extents = crate::osd::special::decode_sparse_read(
+            &item.data,
+            offset,
+            length,
+            max_frame_bytes(),
+            max_frame_bytes() / 16,
+        )
+        .map_err(|_| Error::not_connected(operation))?;
+        Ok((
+            extents,
+            ObjectInfo {
+                size: 0,
+                modified_at: UNIX_EPOCH,
+                version: result.version,
+            },
+        ))
+    }
+
+    /// Computes server-side checksums and returns the count-prefixed payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, malformed-reply, or Ceph errors.
+    pub async fn checksum(
+        &self,
+        kind: ChecksumType,
+        seed: impl AsRef<[u8]>,
+        offset: u64,
+        length: u64,
+        chunk: u64,
+        options: OperationOptions,
+    ) -> Result<Vec<u8>> {
+        let operation = "ObjectRef::checksum";
+        let (kind, width) = match kind {
+            ChecksumType::XxHash32 => (0, 4),
+            ChecksumType::XxHash64 => (1, 8),
+            ChecksumType::Crc32c => (2, 4),
+        };
+        let seed = seed.as_ref();
+        if seed.len() != width
+            || length > i32::MAX as u64
+            || offset.checked_add(length).is_none()
+            || chunk > u64::from(u32::MAX)
+            || chunk != 0 && (length == 0 || !length.is_multiple_of(chunk))
+        {
+            return Err(Error::invalid(operation));
+        }
+        let result = self
+            .execute_special_read(
+                OSDOperation::Checksum {
+                    offset,
+                    length,
+                    chunk: u32::try_from(chunk).map_err(|_| Error::invalid(operation))?,
+                    kind,
+                    seed: seed.to_vec(),
+                },
+                options,
+                operation,
+            )
+            .await?;
+        let data = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected(operation))?
+            .data
+            .clone();
+        crate::osd::special::validate_checksum(&data, width, max_frame_bytes())
+            .map_err(|_| Error::not_connected(operation))?;
+        Ok(data)
+    }
+
     /// Returns object size, modification time, and version.
     ///
     /// # Errors
@@ -1586,6 +1916,203 @@ impl ObjectRef {
             options,
         )
         .await
+    }
+
+    /// Rolls this object back to a named pool snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns snapshot lookup, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn rollback_to_snapshot(
+        &self,
+        name: &str,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let snapshot = self.pool.lookup_snapshot(name, options.clone())?;
+        self.rollback(snapshot.id, options, "ObjectRef::rollback_to_snapshot")
+            .await
+    }
+
+    /// Rolls this object back to a self-managed snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn rollback_to_self_managed_snapshot(
+        &self,
+        snapshot: u64,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let operation = "ObjectRef::rollback_to_self_managed_snapshot";
+        if snapshot == 0 {
+            return Err(Error::invalid(operation));
+        }
+        self.rollback(snapshot, options, operation).await
+    }
+
+    async fn rollback(
+        &self,
+        snapshot: u64,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<OpResult> {
+        self.coordination_mutation_result(OSDOperation::Rollback(snapshot), options, operation)
+            .await
+            .map(|result| public_operation_result(result, operation))
+    }
+
+    /// Repeats `pattern` over one server-side write range.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn write_same(
+        &self,
+        offset: u64,
+        length: u64,
+        pattern: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let operation = "ObjectRef::write_same";
+        let pattern = pattern.as_ref();
+        if pattern.is_empty()
+            || length == 0
+            || !length.is_multiple_of(pattern.len() as u64)
+            || offset.checked_add(length).is_none()
+        {
+            return Err(Error::invalid(operation));
+        }
+        self.coordination_mutation_result(
+            OSDOperation::WriteSame {
+                offset,
+                length,
+                pattern: pattern.to_vec(),
+            },
+            options,
+            operation,
+        )
+        .await
+        .map(|result| public_operation_result(result, operation))
+    }
+
+    /// Sends object and write allocation hints as one advisory operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn set_allocation_hint(
+        &self,
+        expected_object_size: u64,
+        expected_write_size: u64,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        let operation = "ObjectRef::set_allocation_hint";
+        self.coordination_mutation_result(
+            OSDOperation::AllocationHint {
+                expected_object_size,
+                expected_write_size,
+            },
+            options,
+            operation,
+        )
+        .await
+        .map(|result| public_operation_result(result, operation))
+    }
+
+    /// Copies one source object in one server-side operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn copy_from(
+        &self,
+        source: &ObjectRef,
+        source_version: u64,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.copy_from_inner(
+            source,
+            source_version,
+            None,
+            options,
+            "ObjectRef::copy_from",
+        )
+        .await
+    }
+
+    /// Copies one source object with the frozen truncate-context suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, deadline, cancellation, or Ceph errors.
+    pub async fn copy_from2(
+        &self,
+        source: &ObjectRef,
+        source_version: u64,
+        truncate_sequence: u32,
+        truncate_size: u64,
+        options: OperationOptions,
+    ) -> Result<OpResult> {
+        self.copy_from_inner(
+            source,
+            source_version,
+            Some((truncate_sequence, truncate_size)),
+            options,
+            "ObjectRef::copy_from2",
+        )
+        .await
+    }
+
+    async fn copy_from_inner(
+        &self,
+        source: &ObjectRef,
+        source_version: u64,
+        truncate: Option<(u32, u64)>,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<OpResult> {
+        if !Arc::ptr_eq(&self.pool.client.0, &source.pool.client.0) {
+            return Err(Error::invalid(operation));
+        }
+        let (osd_operation, _) = source.copy_operation(source_version, truncate, operation)?;
+        self.coordination_mutation_result(osd_operation, options, operation)
+            .await
+            .map(|result| public_operation_result(result, operation))
+    }
+
+    pub(crate) fn copy_operation(
+        &self,
+        source_version: u64,
+        truncate: Option<(u32, u64)>,
+        operation: &'static str,
+    ) -> Result<(OSDOperation, Client)> {
+        let source_pool = self.pool.id.ok_or_else(|| Error::invalid(operation))?;
+        let encoded = crate::osd::special::encode_copy_source(
+            &crate::osd::special::CopySource {
+                object: self.name.as_bytes(),
+                pool: source_pool,
+                locator: self.pool.locator.as_bytes(),
+                namespace: self.pool.namespace.as_bytes(),
+            },
+            truncate,
+            max_frame_bytes(),
+        )
+        .map_err(|_| Error::invalid(operation))?;
+        let source_snapshot = self.pool.read_snapshot.unwrap_or(NO_SNAP);
+        let osd_operation = if truncate.is_some() {
+            OSDOperation::CopyFrom2 {
+                source_snapshot,
+                source_version,
+                source: encoded,
+            }
+        } else {
+            OSDOperation::CopyFrom {
+                source_snapshot,
+                source_version,
+                source: encoded,
+            }
+        };
+        Ok((osd_operation, self.pool.client.clone()))
     }
 
     /// Writes owned bytes at `offset` without truncating other extents.
@@ -2080,9 +2607,15 @@ impl ObjectRef {
         options: OperationOptions,
         operation_name: &'static str,
     ) -> Result<OpResult> {
+        if operation
+            .copy_sources()
+            .any(|source| !Arc::ptr_eq(&source.0, &self.pool.client.0))
+        {
+            return Err(Error::invalid(operation_name));
+        }
         let operations = operation.into_operations()?;
         let options = self.prepare_operation(options, operation_name)?;
-        if self.pool.read_snapshot.is_some() {
+        if self.pool.read_snapshot.is_some() || !self.pool.write_snapshot_valid {
             return Err(Error::invalid(operation_name));
         }
         let monitor = self.pool.client.connected_monitor(operation_name)?;
@@ -2095,6 +2628,34 @@ impl ObjectRef {
             .await
             .map(|result| public_operation_result(result, operation_name))
             .map_err(|error| map_osd_error(error, operation_name))
+    }
+
+    async fn execute_special_read(
+        &self,
+        operation: OSDOperation,
+        options: OperationOptions,
+        operation_name: &'static str,
+    ) -> Result<CompoundResult> {
+        let options = self.prepare_operation(options, operation_name)?;
+        let monitor = self.pool.client.connected_monitor(operation_name)?;
+        let target = self.target(&monitor, operation_name)?;
+        let result = self
+            .pool
+            .client
+            .0
+            .objecter
+            .execute_operations(&monitor, target, vec![operation], &options)
+            .await
+            .map_err(|error| map_osd_error(error, operation_name))?;
+        let item = result
+            .operations
+            .first()
+            .ok_or_else(|| Error::not_connected(operation_name))?;
+        if item.code < 0 {
+            return Err(Error::from_wire(wire_error_kind(item.code), item.code)
+                .with_operation(operation_name));
+        }
+        Ok(result)
     }
 
     async fn coordination_mutation(
@@ -2114,8 +2675,9 @@ impl ObjectRef {
         options: OperationOptions,
         operation_name: &'static str,
     ) -> Result<CompoundResult> {
+        let allows_failure = matches!(operation, OSDOperation::AllocationHint { .. });
         let options = self.prepare_operation(options, operation_name)?;
-        if self.pool.read_snapshot.is_some() {
+        if self.pool.read_snapshot.is_some() || !self.pool.write_snapshot_valid {
             return Err(Error::invalid(operation_name));
         }
         let monitor = self.pool.client.connected_monitor(operation_name)?;
@@ -2132,7 +2694,7 @@ impl ObjectRef {
             .operations
             .first()
             .ok_or_else(|| Error::not_connected(operation_name))?;
-        if item.code < 0 {
+        if item.code < 0 && !allows_failure {
             return Err(Error::from_wire(wire_error_kind(item.code), item.code)
                 .with_operation(operation_name));
         }
@@ -2206,7 +2768,7 @@ impl ObjectRef {
             operation,
         )?;
         self.pool.client.ready(operation, &options)?;
-        if self.pool.read_snapshot.is_some() {
+        if self.pool.read_snapshot.is_some() || !self.pool.write_snapshot_valid {
             return Err(Error::invalid(operation));
         }
         let monitor = self.pool.client.connected_monitor(operation)?;
@@ -2243,8 +2805,21 @@ impl ObjectRef {
             locator: self.pool.locator.as_bytes().to_vec(),
             namespace: self.pool.namespace.as_bytes().to_vec(),
             snapshot: self.pool.read_snapshot.unwrap_or(NO_SNAP),
+            snapshot_sequence: self.pool.write_snapshot_sequence,
+            write_snapshots: self.pool.write_snapshots.clone(),
         })
     }
+}
+
+fn valid_snapshot_context(context: &SnapshotContext) -> bool {
+    context
+        .snapshots
+        .iter()
+        .enumerate()
+        .all(|(index, snapshot)| {
+            *snapshot <= context.sequence
+                && (index == 0 || *snapshot < context.snapshots[index - 1])
+        })
 }
 
 fn duration_seconds(duration: Duration) -> u32 {
@@ -2691,6 +3266,9 @@ mod tests {
                 namespace: Namespace::new(b"").expect("namespace"),
                 locator: LocatorKey::new(b"").expect("locator"),
                 read_snapshot: None,
+                write_snapshot_sequence: 0,
+                write_snapshots: Vec::new(),
+                write_snapshot_valid: true,
             },
             name: ObjectName::new(b"object").expect("object"),
         }
@@ -2710,6 +3288,54 @@ mod tests {
             operation: Mutex::new(()),
             unwatched: AtomicBool::new(false),
         })
+    }
+
+    #[tokio::test]
+    async fn compound_copy_rejects_a_cross_client_source_before_network_access() {
+        let destination = test_object();
+        let source = test_object();
+        let operation = WriteOp::new()
+            .copy_from(&source, 3)
+            .expect("copy operation");
+        let error = destination
+            .execute_write(operation, OperationOptions::new())
+            .await
+            .expect_err("cross-client source");
+        assert_eq!(error.kind(), ErrorKind::InvalidArgument);
+    }
+
+    #[test]
+    fn compound_copy_builders_preserve_source_context_and_variant() {
+        let destination = test_object();
+        let mut source = destination.pool().object(b"source").expect("source object");
+        source.pool.read_snapshot = Some(9);
+        let operation = WriteOp::new()
+            .copy_from(&source, 3)
+            .expect("copy")
+            .copy_from2(&source, 4, 5, 6)
+            .expect("copy2");
+        assert!(
+            operation
+                .copy_sources()
+                .all(|client| { Arc::ptr_eq(&client.0, &destination.pool.client.0) })
+        );
+        let operations = operation.into_operations().expect("operations");
+        assert!(matches!(
+            &operations[0],
+            OSDOperation::CopyFrom {
+                source_snapshot: 9,
+                source_version: 3,
+                source,
+            } if !source.is_empty()
+        ));
+        assert!(matches!(
+            &operations[1],
+            OSDOperation::CopyFrom2 {
+                source_snapshot: 9,
+                source_version: 4,
+                source,
+            } if source.ends_with(&[5, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0])
+        ));
     }
 
     #[tokio::test]
@@ -3347,5 +3973,41 @@ mod tests {
         assert_send_sync::<ChecksumType>();
         assert_send_sync::<InconsistentObject>();
         assert_send_sync::<InconsistentPg>();
+    }
+
+    #[test]
+    fn write_snapshot_context_is_owned_and_invalidity_is_sticky() {
+        let pool = test_object().pool.clone();
+        let view = pool.clone().with_write_snapshot(SnapshotContext {
+            sequence: 9,
+            snapshots: vec![9, 7, 3],
+        });
+        assert!(view.write_snapshot_valid);
+        assert_eq!(view.write_snapshot_sequence, 9);
+        assert_eq!(view.write_snapshots, [9, 7, 3]);
+
+        let invalid = pool.with_write_snapshot(SnapshotContext {
+            sequence: 9,
+            snapshots: vec![7, 7],
+        });
+        assert!(!invalid.write_snapshot_valid);
+    }
+
+    #[tokio::test]
+    async fn invalid_write_snapshot_context_rejects_basic_mutation_before_io() {
+        let object = test_object();
+        let invalid = object
+            .pool
+            .with_write_snapshot(SnapshotContext {
+                sequence: 9,
+                snapshots: vec![7, 7],
+            })
+            .object(b"object")
+            .expect("object");
+        let error = invalid
+            .write_full(b"data", OperationOptions::new())
+            .await
+            .expect_err("invalid context");
+        assert_eq!(error.kind(), ErrorKind::InvalidArgument);
     }
 }

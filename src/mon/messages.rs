@@ -12,8 +12,37 @@ pub(crate) const MESSAGE_MON_MAP: u16 = 4;
 pub(crate) const MESSAGE_MON_SUBSCRIBE: u16 = 15;
 pub(crate) const MESSAGE_MON_SUBSCRIBE_ACK: u16 = 16;
 pub(crate) const MESSAGE_OSD_MAP: u16 = 41;
+pub(crate) const MESSAGE_POOL_OPERATION_REPLY: u16 = 48;
+pub(crate) const MESSAGE_POOL_OPERATION: u16 = 49;
 pub(crate) const MESSAGE_MGR_MAP: u16 = 0x704;
 pub(crate) const SUBSCRIBE_ONCE: u8 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PoolOperation {
+    Create,
+    Delete,
+    CreateSelfManaged,
+    DeleteSelfManaged,
+}
+
+impl PoolOperation {
+    const fn code(self) -> u32 {
+        match self {
+            Self::Create => 0x11,
+            Self::Delete => 0x12,
+            Self::CreateSelfManaged => 0x21,
+            Self::DeleteSelfManaged => 0x22,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PoolOperationReply {
+    pub(crate) fsid: Fsid,
+    pub(crate) result: i32,
+    pub(crate) epoch: u32,
+    pub(crate) response_data: Vec<u8>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Subscription {
@@ -104,6 +133,78 @@ pub(crate) fn encode_subscribe(
     }
     encoder.string(hostname);
     front_message(MESSAGE_MON_SUBSCRIBE, 3, 1, encoder.finish()?)
+}
+
+pub(crate) fn encode_pool_operation(
+    fsid: Fsid,
+    have_version: u64,
+    pool: u32,
+    operation: PoolOperation,
+    snapshot: u64,
+    name: &str,
+    max_bytes: u32,
+) -> Result<Message> {
+    let valid = match operation {
+        PoolOperation::Create | PoolOperation::Delete => snapshot == 0 && !name.is_empty(),
+        PoolOperation::CreateSelfManaged => snapshot == 0 && name.is_empty(),
+        PoolOperation::DeleteSelfManaged => snapshot != 0 && name.is_empty(),
+    };
+    if !valid || max_bytes == 0 {
+        return Err(WireError::Malformed.into());
+    }
+    let mut encoder = Encoder::new(max_bytes as usize);
+    encoder.u64(have_version);
+    encoder.i16(-1);
+    encoder.u64(0);
+    encoder.raw(&fsid.0);
+    encoder.u32(pool);
+    encoder.u32(operation.code());
+    encoder.u64(0);
+    encoder.u64(snapshot);
+    encoder.string(name);
+    encoder.u8(0);
+    encoder.i16(0);
+    front_message(MESSAGE_POOL_OPERATION, 4, 2, encoder.finish()?)
+}
+
+pub(crate) fn decode_pool_operation_reply(
+    message: &Message,
+    max_bytes: u32,
+) -> Result<PoolOperationReply> {
+    validate_front_message(message, MESSAGE_POOL_OPERATION_REPLY, max_bytes)?;
+    if message.header.compat_version > 1 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    let mut decoder = Decoder::new(&message.front, max_bytes as usize);
+    decoder.u64();
+    decoder.i16();
+    decoder.u64();
+    let fsid = decode_fsid(&mut decoder)?;
+    let result = decoder.i32();
+    let epoch = decoder.u32();
+    let has_response_data = decoder.u8();
+    let response_data = match has_response_data {
+        0 => Vec::new(),
+        1 => decoder.bytes(),
+        _ => return Err(MessageError::Malformed("pool operation response-data flag")),
+    };
+    finish_exact(&decoder, "pool operation reply")?;
+    Ok(PoolOperationReply {
+        fsid,
+        result,
+        epoch,
+        response_data,
+    })
+}
+
+pub(crate) fn decode_allocated_snapshot_id(data: &[u8], max_bytes: usize) -> Result<u64> {
+    let mut decoder = Decoder::new(data, max_bytes);
+    let snapshot = decoder.u64();
+    finish_exact(&decoder, "allocated snapshot ID")?;
+    if snapshot == 0 {
+        return Err(MessageError::Malformed("zero allocated snapshot ID"));
+    }
+    Ok(snapshot)
 }
 
 pub(crate) fn decode_subscribe_ack(message: &Message, max_bytes: u32) -> Result<SubscribeAck> {
@@ -373,6 +474,79 @@ mod tests {
             decode_subscribe_ack(&message(MESSAGE_MON_SUBSCRIBE_ACK, 0, 0, front), 20),
             Err(MessageError::Wire(WireError::Malformed))
         );
+    }
+
+    #[test]
+    fn pool_snapshot_operations_match_frozen_layout_and_validate_unions() {
+        let request =
+            encode_pool_operation(Fsid([1; 16]), 7, 3, PoolOperation::Create, 0, "snap", 1024)
+                .expect("pool operation");
+        assert_eq!(request.header.message_type, MESSAGE_POOL_OPERATION);
+        assert_eq!(
+            (request.header.version, request.header.compat_version),
+            (4, 2)
+        );
+        let mut decoder = Decoder::new(&request.front, 1024);
+        assert_eq!(decoder.u64(), 7);
+        assert_eq!(decoder.i16(), -1);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.raw(16), &[1; 16]);
+        assert_eq!(decoder.u32(), 3);
+        assert_eq!(decoder.u32(), 0x11);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.string(), "snap");
+        assert_eq!(decoder.u8(), 0);
+        assert_eq!(decoder.i16(), 0);
+        assert_eq!(decoder.remaining(), 0);
+
+        assert!(
+            encode_pool_operation(Fsid([1; 16]), 7, 3, PoolOperation::Create, 1, "snap", 1024,)
+                .is_err()
+        );
+        assert!(
+            encode_pool_operation(
+                Fsid([1; 16]),
+                7,
+                3,
+                PoolOperation::DeleteSelfManaged,
+                0,
+                "",
+                1024,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pool_snapshot_reply_and_allocated_id_are_exact() {
+        let mut encoder = Encoder::new(128);
+        encoder.u64(0);
+        encoder.i16(-1);
+        encoder.u64(0);
+        encoder.raw(&[2; 16]);
+        encoder.i32(0);
+        encoder.u32(9);
+        encoder.u8(1);
+        encoder.bytes(&17_u64.to_le_bytes());
+        let reply = decode_pool_operation_reply(
+            &message(
+                MESSAGE_POOL_OPERATION_REPLY,
+                1,
+                1,
+                encoder.finish().expect("reply"),
+            ),
+            128,
+        )
+        .expect("decode reply");
+        assert_eq!(reply.fsid, Fsid([2; 16]));
+        assert_eq!(reply.epoch, 9);
+        assert_eq!(
+            decode_allocated_snapshot_id(&reply.response_data, 8),
+            Ok(17)
+        );
+        assert!(decode_allocated_snapshot_id(&[0; 8], 8).is_err());
+        assert!(decode_allocated_snapshot_id(&[1; 9], 9).is_err());
     }
 
     #[test]

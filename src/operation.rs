@@ -1,13 +1,27 @@
 use crate::osd::messages::{OP_FLAG_FAIL_OK, Operation};
 use crate::osd::metadata::{self, Entry};
-use crate::{Error, OmapEntry, Result, SubOperationFlags};
+use crate::{ChecksumType, Client, Error, ObjectRef, OmapEntry, Result, SubOperationFlags};
 
 const MAX_SUB_OPERATIONS: usize = 16;
 const MAX_OPERATION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadAction {
-    Read { offset: u64, length: u64 },
+    Read {
+        offset: u64,
+        length: u64,
+    },
+    SparseRead {
+        offset: u64,
+        length: u64,
+    },
+    Checksum {
+        offset: u64,
+        length: u64,
+        chunk: u32,
+        kind: u8,
+        seed: Vec<u8>,
+    },
     Stat,
     AssertExists,
     AssertVersion(u64),
@@ -15,7 +29,10 @@ enum ReadAction {
     GetOmapHeader,
     ListOmap(Vec<u8>),
     Exec(Operation),
-    WithFlags { action: Box<Self>, flags: u32 },
+    WithFlags {
+        action: Box<Self>,
+        flags: u32,
+    },
 }
 
 /// A bounded, single-use atomic read-operation builder.
@@ -52,6 +69,54 @@ impl ReadOp {
             return Err(Error::invalid("ReadOp::read"));
         }
         self.push(ReadAction::Read { offset, length })
+    }
+
+    /// Appends a bounded sparse extent read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error on range overflow or excessive length.
+    pub fn sparse_read(self, offset: u64, length: u64) -> Result<Self> {
+        if length > i32::MAX as u64 || offset.checked_add(length).is_none() {
+            return Err(Error::invalid("ReadOp::sparse_read"));
+        }
+        self.push(ReadAction::SparseRead { offset, length })
+    }
+
+    /// Appends a server-side checksum operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for invalid seed or chunk geometry, range overflow, or operation overflow.
+    pub fn checksum(
+        self,
+        kind: ChecksumType,
+        seed: impl AsRef<[u8]>,
+        offset: u64,
+        length: u64,
+        chunk: u64,
+    ) -> Result<Self> {
+        let (kind, width) = match kind {
+            ChecksumType::XxHash32 => (0, 4),
+            ChecksumType::XxHash64 => (1, 8),
+            ChecksumType::Crc32c => (2, 4),
+        };
+        let seed = seed.as_ref();
+        if seed.len() != width
+            || length > i32::MAX as u64
+            || offset.checked_add(length).is_none()
+            || chunk > u64::from(u32::MAX)
+            || chunk != 0 && (length == 0 || !length.is_multiple_of(chunk))
+        {
+            return Err(Error::invalid("ReadOp::checksum"));
+        }
+        self.push(ReadAction::Checksum {
+            offset,
+            length,
+            chunk: u32::try_from(chunk).map_err(|_| Error::invalid("ReadOp::checksum"))?,
+            kind,
+            seed: seed.to_vec(),
+        })
     }
 
     /// Appends a stat operation.
@@ -165,18 +230,46 @@ impl ReadOp {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 enum WriteAction {
-    Create { exclusive: bool },
-    Write { offset: u64, data: Vec<u8> },
+    Create {
+        exclusive: bool,
+    },
+    Write {
+        offset: u64,
+        data: Vec<u8>,
+    },
     WriteFull(Vec<u8>),
     Append(Vec<u8>),
+    Rollback(u64),
+    WriteSame {
+        offset: u64,
+        length: u64,
+        pattern: Vec<u8>,
+    },
+    AllocationHint {
+        expected_object_size: u64,
+        expected_write_size: u64,
+    },
+    Copy {
+        operation: Operation,
+        source_client: Client,
+    },
     Truncate(u64),
-    Zero { offset: u64, length: u64 },
+    Zero {
+        offset: u64,
+        length: u64,
+    },
     Remove,
     AssertVersion(u64),
-    CompareExtent { offset: u64, data: Vec<u8> },
-    SetXattr { name: Vec<u8>, value: Vec<u8> },
+    CompareExtent {
+        offset: u64,
+        data: Vec<u8>,
+    },
+    SetXattr {
+        name: Vec<u8>,
+        value: Vec<u8>,
+    },
     RemoveXattr(Vec<u8>),
     SetOmap(Vec<u8>),
     RemoveOmap(Vec<u8>),
@@ -185,7 +278,10 @@ enum WriteAction {
     SetOmapHeader(Vec<u8>),
     CompareOmap(Vec<u8>),
     Exec(Operation),
-    WithFlags { action: Box<Self>, flags: u32 },
+    WithFlags {
+        action: Box<Self>,
+        flags: u32,
+    },
 }
 
 /// A bounded, single-use atomic write-operation builder.
@@ -261,6 +357,122 @@ impl WriteOp {
     pub fn append(self, data: impl AsRef<[u8]>) -> Result<Self> {
         let data = data.as_ref();
         self.push(WriteAction::Append(data.to_vec()), data.len())
+    }
+
+    /// Appends rollback to a resolved named snapshot ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for snapshot ID zero or operation overflow.
+    pub fn rollback_to_snapshot(self, snapshot: u64) -> Result<Self> {
+        self.rollback(snapshot, "WriteOp::rollback_to_snapshot")
+    }
+
+    /// Appends rollback to a self-managed snapshot ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for snapshot ID zero or operation overflow.
+    pub fn rollback_to_self_managed_snapshot(self, snapshot: u64) -> Result<Self> {
+        self.rollback(snapshot, "WriteOp::rollback_to_self_managed_snapshot")
+    }
+
+    fn rollback(self, snapshot: u64, operation: &'static str) -> Result<Self> {
+        if snapshot == 0 {
+            return Err(Error::invalid(operation));
+        }
+        self.push(WriteAction::Rollback(snapshot), 0)
+    }
+
+    /// Appends a repeated-pattern server-side write.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for invalid range or pattern geometry, retained-byte overflow, or operation overflow.
+    pub fn write_same(self, offset: u64, length: u64, pattern: impl AsRef<[u8]>) -> Result<Self> {
+        let pattern = pattern.as_ref();
+        if pattern.is_empty()
+            || length == 0
+            || !length.is_multiple_of(pattern.len() as u64)
+            || offset.checked_add(length).is_none()
+        {
+            return Err(Error::invalid("WriteOp::write_same"));
+        }
+        self.push(
+            WriteAction::WriteSame {
+                offset,
+                length,
+                pattern: pattern.to_vec(),
+            },
+            pattern.len(),
+        )
+    }
+
+    /// Appends advisory object and write allocation sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error when the operation bound is reached.
+    pub fn set_allocation_hint(
+        self,
+        expected_object_size: u64,
+        expected_write_size: u64,
+    ) -> Result<Self> {
+        self.push(
+            WriteAction::AllocationHint {
+                expected_object_size,
+                expected_write_size,
+            },
+            0,
+        )
+    }
+
+    /// Appends a server-side copy from `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unresolved source or retained-byte or operation overflow.
+    pub fn copy_from(self, source: &ObjectRef, source_version: u64) -> Result<Self> {
+        self.copy(source, source_version, None, "WriteOp::copy_from")
+    }
+
+    /// Appends a server-side copy with truncate context from `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-argument error for an unresolved source or retained-byte or operation overflow.
+    pub fn copy_from2(
+        self,
+        source: &ObjectRef,
+        source_version: u64,
+        truncate_sequence: u32,
+        truncate_size: u64,
+    ) -> Result<Self> {
+        self.copy(
+            source,
+            source_version,
+            Some((truncate_sequence, truncate_size)),
+            "WriteOp::copy_from2",
+        )
+    }
+
+    fn copy(
+        self,
+        source: &ObjectRef,
+        source_version: u64,
+        truncate: Option<(u32, u64)>,
+        operation_name: &'static str,
+    ) -> Result<Self> {
+        let (operation, source_client) =
+            source.copy_operation(source_version, truncate, operation_name)?;
+        let retained = operation.data_len();
+        self.push(
+            WriteAction::Copy {
+                operation,
+                source_client,
+            },
+            retained,
+        )
     }
 
     /// Appends a truncate operation.
@@ -480,6 +692,18 @@ impl WriteOp {
         }
         Ok(self.actions.into_iter().map(write_operation).collect())
     }
+
+    pub(crate) fn copy_sources(&self) -> impl Iterator<Item = &Client> {
+        self.actions.iter().filter_map(write_action_copy_source)
+    }
+}
+
+fn write_action_copy_source(action: &WriteAction) -> Option<&Client> {
+    match action {
+        WriteAction::Copy { source_client, .. } => Some(source_client),
+        WriteAction::WithFlags { action, .. } => write_action_copy_source(action),
+        _ => None,
+    }
 }
 
 fn valid_xattr_name(name: &[u8], operation: &'static str) -> Result<Vec<u8>> {
@@ -531,6 +755,20 @@ fn class_operation(
 fn read_operation(action: ReadAction) -> Operation {
     match action {
         ReadAction::Read { offset, length } => Operation::Read { offset, length },
+        ReadAction::SparseRead { offset, length } => Operation::SparseRead { offset, length },
+        ReadAction::Checksum {
+            offset,
+            length,
+            chunk,
+            kind,
+            seed,
+        } => Operation::Checksum {
+            offset,
+            length,
+            chunk,
+            kind,
+            seed,
+        },
         ReadAction::Stat | ReadAction::AssertExists => Operation::Stat,
         ReadAction::AssertVersion(version) => Operation::AssertVersion(version),
         ReadAction::GetXattr(name) => Operation::GetXattr(name),
@@ -550,6 +788,24 @@ fn write_operation(action: WriteAction) -> Operation {
         WriteAction::Write { offset, data } => Operation::Write { offset, data },
         WriteAction::WriteFull(data) => Operation::WriteFull(data),
         WriteAction::Append(data) => Operation::Append(data),
+        WriteAction::Rollback(snapshot) => Operation::Rollback(snapshot),
+        WriteAction::WriteSame {
+            offset,
+            length,
+            pattern,
+        } => Operation::WriteSame {
+            offset,
+            length,
+            pattern,
+        },
+        WriteAction::AllocationHint {
+            expected_object_size,
+            expected_write_size,
+        } => Operation::AllocationHint {
+            expected_object_size,
+            expected_write_size,
+        },
+        WriteAction::Copy { operation, .. } | WriteAction::Exec(operation) => operation,
         WriteAction::Truncate(size) => Operation::Truncate { size },
         WriteAction::Zero { offset, length } => Operation::Zero { offset, length },
         WriteAction::Remove => Operation::Remove,
@@ -563,7 +819,6 @@ fn write_operation(action: WriteAction) -> Operation {
         WriteAction::ClearOmap => Operation::OmapClear,
         WriteAction::SetOmapHeader(value) => Operation::OmapSetHeader(value),
         WriteAction::CompareOmap(payload) => Operation::OmapCompare(payload),
-        WriteAction::Exec(operation) => operation,
         WriteAction::WithFlags { action, flags } => Operation::WithFlags {
             operation: Box::new(write_operation(*action)),
             flags,
@@ -671,5 +926,81 @@ mod tests {
         assert!(write[0].is_mutation());
         assert!(ReadOp::new().exec([], b"method", []).is_err());
         assert!(WriteOp::new().exec(b"class", b"bad\0name", []).is_err());
+    }
+
+    #[test]
+    fn specialized_read_builders_validate_and_lower_in_order() {
+        let mut seed = 7_u32.to_le_bytes();
+        let operations = ReadOp::new()
+            .sparse_read(4, 8)
+            .expect("sparse read")
+            .checksum(ChecksumType::Crc32c, seed, 0, 8, 4)
+            .expect("checksum")
+            .into_operations()
+            .expect("operations");
+        seed.fill(0);
+        assert_eq!(
+            operations,
+            vec![
+                Operation::SparseRead {
+                    offset: 4,
+                    length: 8
+                },
+                Operation::Checksum {
+                    offset: 0,
+                    length: 8,
+                    chunk: 4,
+                    kind: 2,
+                    seed: 7_u32.to_le_bytes().to_vec(),
+                },
+            ]
+        );
+        assert!(ReadOp::new().sparse_read(u64::MAX, 1).is_err());
+        assert!(
+            ReadOp::new()
+                .checksum(ChecksumType::XxHash64, [0; 4], 0, 8, 4)
+                .is_err()
+        );
+        assert!(
+            ReadOp::new()
+                .checksum(ChecksumType::Crc32c, [0; 4], 0, 7, 4)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn specialized_write_builders_validate_own_and_lower_in_order() {
+        let mut pattern = b"ab".to_vec();
+        let operations = WriteOp::new()
+            .rollback_to_snapshot(7)
+            .expect("named rollback")
+            .rollback_to_self_managed_snapshot(8)
+            .expect("self-managed rollback")
+            .write_same(4, 8, &pattern)
+            .expect("write same")
+            .set_allocation_hint(32, 8)
+            .expect("allocation hint")
+            .into_operations()
+            .expect("operations");
+        pattern.fill(b'x');
+        assert_eq!(
+            operations,
+            vec![
+                Operation::Rollback(7),
+                Operation::Rollback(8),
+                Operation::WriteSame {
+                    offset: 4,
+                    length: 8,
+                    pattern: b"ab".to_vec(),
+                },
+                Operation::AllocationHint {
+                    expected_object_size: 32,
+                    expected_write_size: 8,
+                },
+            ]
+        );
+        assert!(WriteOp::new().rollback_to_snapshot(0).is_err());
+        assert!(WriteOp::new().write_same(0, 3, b"ab").is_err());
+        assert!(WriteOp::new().write_same(0, 1, []).is_err());
     }
 }

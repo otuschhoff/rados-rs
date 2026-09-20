@@ -6,15 +6,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Mutex, mpsc, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use super::messages::{
-    MESSAGE_MGR_MAP, MESSAGE_MON_MAP, MESSAGE_MON_SUBSCRIBE_ACK, MESSAGE_OSD_MAP, MessageError,
-    MessageLimits, SUBSCRIBE_ONCE, Subscription, decode_mgrmap_message, decode_monmap_message,
-    decode_osdmap_batch, decode_osdmap_batch_maps, decode_subscribe_ack, encode_subscribe,
+    MESSAGE_MGR_MAP, MESSAGE_MON_MAP, MESSAGE_MON_SUBSCRIBE_ACK, MESSAGE_OSD_MAP,
+    MESSAGE_POOL_OPERATION_REPLY, MessageError, MessageLimits, PoolOperation, PoolOperationReply,
+    SUBSCRIBE_ONCE, Subscription, decode_mgrmap_message, decode_monmap_message,
+    decode_osdmap_batch, decode_osdmap_batch_maps, decode_pool_operation_reply,
+    decode_subscribe_ack, encode_pool_operation, encode_subscribe,
 };
 use super::seeds::Endpoint;
+use crate::OperationOptions;
 use crate::maps::{
     Fsid, Limits as MapLimits, MapError, MgrMap, MonMap, OSDMap, Pool, apply_osdmap_incremental,
 };
@@ -38,6 +41,7 @@ pub(crate) enum MonitorError {
     Session(SessionError),
     Message(MessageError),
     Map(MapError),
+    WireErrno(i32),
 }
 
 impl fmt::Display for MonitorError {
@@ -55,6 +59,7 @@ impl fmt::Display for MonitorError {
             Self::Session(error) => write!(formatter, "monitor session failed: {error:?}"),
             Self::Message(error) => write!(formatter, "monitor message failed: {error}"),
             Self::Map(error) => write!(formatter, "monitor map failed: {error}"),
+            Self::WireErrno(code) => write!(formatter, "monitor operation failed: errno {code}"),
         }
     }
 }
@@ -228,6 +233,7 @@ pub(crate) struct MonitorClient {
     errors: mpsc::Receiver<MonitorError>,
     terminal: watch::Receiver<Option<MonitorError>>,
     refresh: mpsc::Sender<u32>,
+    pool_operations: mpsc::Sender<PoolOperationCommand>,
     stop: watch::Sender<bool>,
     owner: Mutex<Option<JoinHandle<()>>>,
 }
@@ -247,6 +253,7 @@ impl MonitorClient {
         let (errors_tx, errors) = mpsc::channel(config.error_capacity);
         let (terminal_tx, terminal) = watch::channel(None);
         let (refresh, refresh_rx) = mpsc::channel(1);
+        let (pool_operations, pool_operations_rx) = mpsc::channel(16);
         let (stop, stop_rx) = watch::channel(false);
         let owner_history = Arc::clone(&history);
         let owner = tokio::spawn(async move {
@@ -263,6 +270,8 @@ impl MonitorClient {
                 stop: stop_rx,
                 refresh_epoch: None,
                 refresh_rx,
+                pool_operations_rx,
+                next_pool_transaction_id: 1,
                 foreign_seeds: HashSet::new(),
             }
             .run()
@@ -274,6 +283,7 @@ impl MonitorClient {
             errors,
             terminal,
             refresh,
+            pool_operations,
             stop,
             owner: Mutex::new(Some(owner)),
         })
@@ -354,6 +364,86 @@ impl MonitorClient {
         }
     }
 
+    pub(crate) async fn apply_pool_operation(
+        &self,
+        pool: u32,
+        operation: PoolOperation,
+        snapshot: u64,
+        name: String,
+        options: OperationOptions,
+    ) -> Result<PoolOperationReply, MonitorError> {
+        let (reply, receive) = oneshot::channel();
+        let mut command = PoolOperationCommand {
+            transaction_id: 0,
+            pool,
+            operation,
+            snapshot,
+            name,
+            options: options.clone(),
+            reply,
+        };
+        loop {
+            if options.is_canceled() {
+                return Err(MonitorError::Session(SessionError::Cancelled));
+            }
+            if options
+                .deadline()
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(MonitorError::ConnectTimeout);
+            }
+            match self.pool_operations.try_send(command) {
+                Ok(()) => break,
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    return Err(self.terminal().unwrap_or(MonitorError::Closed));
+                }
+                Err(mpsc::error::TrySendError::Full(returned)) => command = returned,
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let reply = receive
+            .await
+            .map_err(|_| self.terminal().unwrap_or(MonitorError::Closed))??;
+        let mut state = self.state.clone();
+        let mut terminal = self.terminal.clone();
+        loop {
+            if options.is_canceled() {
+                return Err(MonitorError::Session(SessionError::OutcomeUnknown));
+            }
+            if options
+                .deadline()
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(MonitorError::Session(SessionError::OutcomeUnknown));
+            }
+            if state
+                .borrow()
+                .osdmap()
+                .is_some_and(|map| map.epoch() >= reply.epoch)
+            {
+                return Ok(reply);
+            }
+            if let Some(error) = *terminal.borrow() {
+                let _ = error;
+                return Err(MonitorError::Session(SessionError::OutcomeUnknown));
+            }
+            let _ = self.refresh.try_send(reply.epoch.saturating_sub(1));
+            tokio::select! {
+                changed = state.changed() => {
+                    if changed.is_err() {
+                        return Err(MonitorError::Session(SessionError::OutcomeUnknown));
+                    }
+                }
+                changed = terminal.changed() => {
+                    if changed.is_err() {
+                        return Err(MonitorError::Session(SessionError::OutcomeUnknown));
+                    }
+                }
+                () = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
     pub(crate) fn close(&self) {
         let _ = self.stop.send(true);
     }
@@ -385,7 +475,19 @@ struct Owner {
     stop: watch::Receiver<bool>,
     refresh_epoch: Option<u32>,
     refresh_rx: mpsc::Receiver<u32>,
+    pool_operations_rx: mpsc::Receiver<PoolOperationCommand>,
+    next_pool_transaction_id: u64,
     foreign_seeds: HashSet<SocketAddr>,
+}
+
+struct PoolOperationCommand {
+    transaction_id: u64,
+    pool: u32,
+    operation: PoolOperation,
+    snapshot: u64,
+    name: String,
+    options: OperationOptions,
+    reply: oneshot::Sender<Result<PoolOperationReply, MonitorError>>,
 }
 
 impl Owner {
@@ -469,6 +571,7 @@ impl Owner {
     #[allow(clippy::too_many_lines)]
     async fn run_session(&mut self, opened: OpenedMonitorSession) -> SessionOutcome {
         let session = opened.session;
+        let mut pending_pool_operation: Option<PoolOperationCommand> = None;
         self.state.global_id = Some(opened.global_id);
         self.publish().await;
         if let Err(error) = self.subscribe(&session, false).await {
@@ -491,7 +594,23 @@ impl Owner {
                 Failure(SessionError),
                 Subscribe,
                 Refresh(Option<u32>),
+                PoolOperation(Option<PoolOperationCommand>),
+                PoolOperationCheck,
             }
+            let check_deadline = pending_pool_operation.as_ref().map_or_else(
+                || tokio::time::Instant::now() + self.config.operation_timeout,
+                |command| {
+                    command.options.deadline().map_or_else(
+                        || tokio::time::Instant::now() + Duration::from_millis(10),
+                        |deadline| {
+                            tokio::time::Instant::from_std(deadline)
+                                .min(tokio::time::Instant::now() + Duration::from_millis(10))
+                        },
+                    )
+                },
+            );
+            let pool_operation_check = tokio::time::sleep_until(check_deadline);
+            tokio::pin!(pool_operation_check);
             let event = tokio::select! {
                 changed = self.stop.changed() => {
                     let _ = changed;
@@ -501,12 +620,45 @@ impl Owner {
                 error = session.next_failure() => Event::Failure(error),
                 () = &mut timer => Event::Subscribe,
                 epoch = self.refresh_rx.recv() => Event::Refresh(epoch),
+                command = self.pool_operations_rx.recv(), if pending_pool_operation.is_none() => {
+                    Event::PoolOperation(command)
+                }
+                () = &mut pool_operation_check, if pending_pool_operation.is_some() => {
+                    Event::PoolOperationCheck
+                }
             };
             match event {
                 Event::Stop => {
                     session.close();
                     session.shutdown().await;
                     return SessionOutcome::Stop;
+                }
+                Event::Incoming(Some(message))
+                    if message.header.message_type == MESSAGE_POOL_OPERATION_REPLY =>
+                {
+                    if pending_pool_operation.as_ref().is_none_or(|pending| {
+                        pending.transaction_id != message.header.transaction_id
+                    }) {
+                        self.report(MonitorError::Message(MessageError::Malformed(
+                            "uncorrelated pool operation reply",
+                        )));
+                        continue;
+                    }
+                    let result =
+                        decode_pool_operation_reply(&message, self.config.message_limits.max_bytes)
+                            .map_err(MonitorError::from);
+                    let command = pending_pool_operation
+                        .take()
+                        .expect("transaction guard requires a pending pool operation");
+                    let _ = command.reply.send(result.and_then(|reply| {
+                        if Some(reply.fsid) != self.pinned_fsid {
+                            Err(MonitorError::ForeignCluster)
+                        } else if reply.result != 0 {
+                            Err(MonitorError::WireErrno(reply.result))
+                        } else {
+                            Ok(reply)
+                        }
+                    }));
                 }
                 Event::Incoming(Some(message)) => match self.handle_message(message).await {
                     Ok(MessageAction::None) => {}
@@ -533,12 +685,14 @@ impl Owner {
                         }
                     }
                     Err(MonitorError::ForeignCluster) => {
+                        fail_pending_pool_operation(&mut pending_pool_operation);
                         self.report(MonitorError::ForeignCluster);
                         session.close();
                         session.shutdown().await;
                         return SessionOutcome::ForeignCluster;
                     }
                     Err(error) => {
+                        fail_pending_pool_operation(&mut pending_pool_operation);
                         self.report(error);
                         session.close();
                         session.shutdown().await;
@@ -546,10 +700,12 @@ impl Owner {
                     }
                 },
                 Event::Incoming(None) => {
+                    fail_pending_pool_operation(&mut pending_pool_operation);
                     session.shutdown().await;
                     return SessionOutcome::Failover;
                 }
                 Event::Failure(error) => {
+                    fail_pending_pool_operation(&mut pending_pool_operation);
                     self.report(error.into());
                     session.shutdown().await;
                     return SessionOutcome::Failover;
@@ -571,7 +727,73 @@ impl Owner {
                         self.report(error);
                     }
                 }
-                Event::Refresh(None) => {}
+                Event::Refresh(None) | Event::PoolOperation(None) => {}
+                Event::PoolOperation(Some(mut command)) => {
+                    if command.options.is_canceled() {
+                        let _ = command
+                            .reply
+                            .send(Err(MonitorError::Session(SessionError::Cancelled)));
+                        continue;
+                    }
+                    if command
+                        .options
+                        .deadline()
+                        .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+                    {
+                        let _ = command.reply.send(Err(MonitorError::ConnectTimeout));
+                        continue;
+                    }
+                    let Some(fsid) = self.pinned_fsid else {
+                        let _ = command.reply.send(Err(MonitorError::IdentityUnavailable));
+                        continue;
+                    };
+                    let epoch = self.state.osdmap.as_ref().map_or(0, |map| map.epoch());
+                    let mut message = match encode_pool_operation(
+                        fsid,
+                        u64::from(epoch),
+                        command.pool,
+                        command.operation,
+                        command.snapshot,
+                        &command.name,
+                        self.config.message_limits.max_bytes,
+                    ) {
+                        Ok(message) => message,
+                        Err(error) => {
+                            let _ = command.reply.send(Err(error.into()));
+                            continue;
+                        }
+                    };
+                    command.transaction_id = self.next_pool_transaction_id;
+                    message.header.transaction_id = command.transaction_id;
+                    self.next_pool_transaction_id = self.next_pool_transaction_id.wrapping_add(1);
+                    if self.next_pool_transaction_id == 0 {
+                        self.next_pool_transaction_id = 1;
+                    }
+                    pending_pool_operation = Some(command);
+                    if let Err(error) = session.send(message).await {
+                        if let Some(command) = pending_pool_operation.take() {
+                            let _ = command.reply.send(Err(error.into()));
+                        }
+                        session.close();
+                        session.shutdown().await;
+                        return SessionOutcome::Failover;
+                    }
+                }
+                Event::PoolOperationCheck => {
+                    let expired = pending_pool_operation.as_ref().is_some_and(|command| {
+                        command.options.is_canceled()
+                            || command
+                                .options
+                                .deadline()
+                                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+                    });
+                    if expired {
+                        fail_pending_pool_operation(&mut pending_pool_operation);
+                        session.close();
+                        session.shutdown().await;
+                        return SessionOutcome::Failover;
+                    }
+                }
             }
         }
     }
@@ -753,6 +975,14 @@ impl Owner {
 
     fn finish(&self, error: MonitorError) {
         self.terminal.send_replace(Some(error));
+    }
+}
+
+fn fail_pending_pool_operation(command: &mut Option<PoolOperationCommand>) {
+    if let Some(command) = command.take() {
+        let _ = command
+            .reply
+            .send(Err(MonitorError::Session(SessionError::OutcomeUnknown)));
     }
 }
 
@@ -1045,6 +1275,75 @@ mod tests {
         )
     }
 
+    fn pool_operation_reply(
+        transaction_id: u64,
+        fsid: Fsid,
+        result: i32,
+        epoch: u32,
+        snapshot: u64,
+    ) -> Message {
+        let mut encoder = Encoder::new(128);
+        encoder.u64(0);
+        encoder.i16(-1);
+        encoder.u64(0);
+        encoder.raw(&fsid.0);
+        encoder.i32(result);
+        encoder.u32(epoch);
+        encoder.u8(1);
+        encoder.bytes(&snapshot.to_le_bytes());
+        let mut message = front_message(
+            MESSAGE_POOL_OPERATION_REPLY,
+            1,
+            1,
+            encoder.finish().expect("pool operation reply"),
+        );
+        message.header.transaction_id = transaction_id;
+        message
+    }
+
+    async fn assert_pool_operation_wire_error(
+        client: &Arc<MonitorClient>,
+        handle: &Arc<FakeHandle>,
+        fsid: Fsid,
+        epoch: u32,
+        result: i32,
+    ) {
+        let operation_client = Arc::clone(client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::DeleteSelfManaged,
+                    17,
+                    String::new(),
+                    OperationOptions::new(),
+                )
+                .await
+        });
+        let request = handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("second pool operation");
+        handle
+            .incoming
+            .send(pool_operation_reply(
+                request.header.transaction_id,
+                fsid,
+                result,
+                epoch,
+                0,
+            ))
+            .await
+            .expect("error reply");
+        assert_eq!(
+            operation.await.expect("join"),
+            Err(MonitorError::WireErrno(result))
+        );
+    }
+
     fn empty_incremental(fsid: Fsid, epoch: u32, full_crc: u32) -> Vec<u8> {
         let mut encoder = Encoder::new(64 << 10);
         encoder.versioned(8, 7, |wrapper| {
@@ -1147,6 +1446,374 @@ mod tests {
             Err(MonitorError::AttemptsExhausted)
         ));
         assert_eq!(failures.load(Ordering::Relaxed), 2);
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn pool_operation_is_serialized_and_correlated() {
+        let (opened, handle) = fake_session();
+        let opened = Arc::new(Mutex::new(Some(opened)));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single open")) })
+        });
+        let client = Arc::new(MonitorClient::spawn(config(), factory).expect("client"));
+        tokio::time::timeout(Duration::from_secs(1), handle.sent.lock().await.recv())
+            .await
+            .expect("subscription timeout")
+            .expect("subscription");
+        let map_bytes = fixture("osdmap-v8.bin");
+        let map = crate::maps::decode_osdmap(&map_bytes, limits()).expect("map");
+        handle.incoming.send(ack(map.fsid())).await.expect("ack");
+        handle
+            .incoming
+            .send(monmap_message(&fixture("monmap-v9.bin")))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), map_bytes)],
+                map.epoch(),
+            ))
+            .await
+            .expect("map");
+        tokio::time::timeout(Duration::from_secs(1), client.wait_ready())
+            .await
+            .expect("ready timeout")
+            .expect("ready");
+
+        let operation_client = Arc::clone(&client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::CreateSelfManaged,
+                    0,
+                    String::new(),
+                    OperationOptions::new()
+                        .with_timeout(Duration::from_secs(1))
+                        .expect("options"),
+                )
+                .await
+        });
+        let request = tokio::time::timeout(Duration::from_secs(1), handle.sent.lock().await.recv())
+            .await
+            .expect("pool operation timeout")
+            .expect("pool operation");
+        assert_eq!(
+            request.header.message_type,
+            crate::mon::messages::MESSAGE_POOL_OPERATION
+        );
+        handle
+            .incoming
+            .send(pool_operation_reply(
+                request.header.transaction_id + 1,
+                map.fsid(),
+                0,
+                map.epoch(),
+                99,
+            ))
+            .await
+            .expect("stale reply");
+        tokio::task::yield_now().await;
+        assert!(!operation.is_finished());
+        handle
+            .incoming
+            .send(pool_operation_reply(
+                request.header.transaction_id,
+                map.fsid(),
+                0,
+                map.epoch(),
+                17,
+            ))
+            .await
+            .expect("reply");
+        let reply = tokio::time::timeout(Duration::from_secs(1), operation)
+            .await
+            .expect("reply timeout")
+            .expect("join")
+            .expect("operation");
+        assert_eq!(reply.response_data, 17_u64.to_le_bytes());
+
+        assert_pool_operation_wire_error(&client, &handle, map.fsid(), map.epoch(), -13).await;
+        assert_pool_operation_wire_error(&client, &handle, map.fsid(), map.epoch(), 13).await;
+        tokio::time::timeout(Duration::from_secs(1), client.shutdown())
+            .await
+            .expect("shutdown timeout");
+    }
+
+    #[tokio::test]
+    async fn foreign_pool_operation_reply_is_a_per_call_error() {
+        let (opened, handle) = fake_session();
+        let opened = Arc::new(Mutex::new(Some(opened)));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single session")) })
+        });
+        let client = Arc::new(MonitorClient::spawn(config(), factory).expect("client"));
+        handle.sent.lock().await.recv().await.expect("subscription");
+        let map_bytes = fixture("osdmap-v8.bin");
+        let map = crate::maps::decode_osdmap(&map_bytes, limits()).expect("map");
+        handle.incoming.send(ack(map.fsid())).await.expect("ack");
+        handle
+            .incoming
+            .send(monmap_message(&fixture("monmap-v9.bin")))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), map_bytes)],
+                map.epoch(),
+            ))
+            .await
+            .expect("map");
+        client.wait_ready().await.expect("ready");
+
+        let operation_client = Arc::clone(&client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::CreateSelfManaged,
+                    0,
+                    String::new(),
+                    OperationOptions::new(),
+                )
+                .await
+        });
+        let request = handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("pool operation");
+        handle
+            .incoming
+            .send(pool_operation_reply(
+                request.header.transaction_id,
+                Fsid([9; 16]),
+                0,
+                map.epoch(),
+                17,
+            ))
+            .await
+            .expect("foreign reply");
+        assert_eq!(
+            operation.await.expect("join"),
+            Err(MonitorError::ForeignCluster)
+        );
+        assert!(!handle.session.closed.load(Ordering::Acquire));
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn dispatched_pool_operation_timeout_is_outcome_unknown_and_resets_session() {
+        let (opened, handle) = fake_session();
+        let opened = Arc::new(Mutex::new(Some(opened)));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move {
+                opened
+                    .lock()
+                    .await
+                    .take()
+                    .ok_or(MonitorError::AttemptsExhausted)
+            })
+        });
+        let client = Arc::new(MonitorClient::spawn(config(), factory).expect("client"));
+        handle.sent.lock().await.recv().await.expect("subscription");
+        let map_bytes = fixture("osdmap-v8.bin");
+        let map = crate::maps::decode_osdmap(&map_bytes, limits()).expect("map");
+        handle.incoming.send(ack(map.fsid())).await.expect("ack");
+        handle
+            .incoming
+            .send(monmap_message(&fixture("monmap-v9.bin")))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), map_bytes)],
+                map.epoch(),
+            ))
+            .await
+            .expect("map");
+        tokio::time::timeout(Duration::from_secs(1), client.wait_ready())
+            .await
+            .expect("ready timeout")
+            .expect("ready");
+
+        let operation_client = Arc::clone(&client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::CreateSelfManaged,
+                    0,
+                    String::new(),
+                    OperationOptions::new()
+                        .with_timeout(Duration::from_millis(50))
+                        .expect("options"),
+                )
+                .await
+        });
+        handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("pool operation");
+        assert_eq!(
+            operation.await.expect("join"),
+            Err(MonitorError::Session(SessionError::OutcomeUnknown))
+        );
+        assert!(handle.session.closed.load(Ordering::Acquire));
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn committed_pool_operation_without_visible_map_is_outcome_unknown() {
+        let (opened, handle) = fake_session();
+        let opened = Arc::new(Mutex::new(Some(opened)));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single open")) })
+        });
+        let client = Arc::new(MonitorClient::spawn(config(), factory).expect("client"));
+        handle.sent.lock().await.recv().await.expect("subscription");
+        let map_bytes = fixture("osdmap-v8.bin");
+        let map = crate::maps::decode_osdmap(&map_bytes, limits()).expect("map");
+        handle.incoming.send(ack(map.fsid())).await.expect("ack");
+        handle
+            .incoming
+            .send(monmap_message(&fixture("monmap-v9.bin")))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), map_bytes)],
+                map.epoch(),
+            ))
+            .await
+            .expect("map");
+        tokio::time::timeout(Duration::from_secs(1), client.wait_ready())
+            .await
+            .expect("ready timeout")
+            .expect("ready");
+
+        let operation_client = Arc::clone(&client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::CreateSelfManaged,
+                    0,
+                    String::new(),
+                    OperationOptions::new()
+                        .with_timeout(Duration::from_millis(100))
+                        .expect("options"),
+                )
+                .await
+        });
+        let request = handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("pool operation");
+        handle
+            .incoming
+            .send(pool_operation_reply(
+                request.header.transaction_id,
+                map.fsid(),
+                0,
+                map.epoch() + 1,
+                17,
+            ))
+            .await
+            .expect("successful reply");
+        assert_eq!(
+            operation.await.expect("join"),
+            Err(MonitorError::Session(SessionError::OutcomeUnknown))
+        );
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn fatal_message_marks_pending_pool_operation_outcome_unknown() {
+        let (first, handle) = fake_session();
+        let (second, _second_handle) = fake_session();
+        let sessions = Arc::new(Mutex::new(VecDeque::from([first, second])));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let sessions = Arc::clone(&sessions);
+            Box::pin(
+                async move { Ok(sessions.lock().await.pop_front().expect("scripted session")) },
+            )
+        });
+        let client = Arc::new(MonitorClient::spawn(config(), factory).expect("client"));
+        handle.sent.lock().await.recv().await.expect("subscription");
+        let map_bytes = fixture("osdmap-v8.bin");
+        let map = crate::maps::decode_osdmap(&map_bytes, limits()).expect("map");
+        handle.incoming.send(ack(map.fsid())).await.expect("ack");
+        handle
+            .incoming
+            .send(monmap_message(&fixture("monmap-v9.bin")))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), map_bytes)],
+                map.epoch(),
+            ))
+            .await
+            .expect("map");
+        client.wait_ready().await.expect("ready");
+
+        let operation_client = Arc::clone(&client);
+        let operation = tokio::spawn(async move {
+            operation_client
+                .apply_pool_operation(
+                    3,
+                    PoolOperation::CreateSelfManaged,
+                    0,
+                    String::new(),
+                    OperationOptions::new(),
+                )
+                .await
+        });
+        handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("pool operation");
+        handle
+            .incoming
+            .send(ack(Fsid([9; 16])))
+            .await
+            .expect("foreign message");
+        assert_eq!(
+            operation.await.expect("join"),
+            Err(MonitorError::Session(SessionError::OutcomeUnknown))
+        );
         client.shutdown().await;
     }
 
@@ -1469,6 +2136,7 @@ mod tests {
         let (terminal, _) = watch::channel(None);
         let (_, stop) = watch::channel(false);
         let (_, refresh_rx) = mpsc::channel(1);
+        let (_, pool_operations_rx) = mpsc::channel(1);
         (
             Owner {
                 config: config(),
@@ -1483,6 +2151,8 @@ mod tests {
                 stop,
                 refresh_epoch: None,
                 refresh_rx,
+                pool_operations_rx,
+                next_pool_transaction_id: 1,
                 foreign_seeds: HashSet::new(),
             },
             state,

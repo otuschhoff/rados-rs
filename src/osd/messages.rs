@@ -8,6 +8,7 @@ const MESSAGE_OSD_OP: u16 = 42;
 const MESSAGE_OSD_OP_REPLY: u16 = 43;
 const OP_READ: u16 = 0x1201;
 const OP_STAT: u16 = 0x1202;
+const OP_SPARSE_READ: u16 = 0x1205;
 const OP_NOTIFY: u16 = 0x1206;
 const OP_NOTIFY_ACK: u16 = 0x1207;
 const OP_ASSERT_VERSION: u16 = 0x1208;
@@ -17,6 +18,7 @@ const OP_OMAP_GET_HEADER: u16 = 0x1213;
 const OP_OMAP_GET_VALUES_BY_KEYS: u16 = 0x1214;
 const OP_OMAP_COMPARE: u16 = 0x1219;
 const OP_COMPARE_EXTENT: u16 = 0x1220;
+const OP_CHECKSUM: u16 = 0x121f;
 const OP_GET_XATTR: u16 = 0x1301;
 const OP_GET_XATTRS: u16 = 0x1302;
 const OP_CALL: u16 = 0x1401;
@@ -27,6 +29,11 @@ const OP_TRUNCATE: u16 = 0x2203;
 const OP_ZERO: u16 = 0x2204;
 const OP_DELETE: u16 = 0x2205;
 const OP_APPEND: u16 = 0x2206;
+const OP_ROLLBACK: u16 = 0x220e;
+const OP_COPY_FROM: u16 = 0x221a;
+const OP_SET_ALLOCATION_HINT: u16 = 0x2223;
+const OP_WRITE_SAME: u16 = 0x2226;
+const OP_COPY_FROM2: u16 = 0x222d;
 const OP_WATCH: u16 = 0x220f;
 const OP_CREATE: u16 = 0x220d;
 const OP_OMAP_SET_VALUES: u16 = 0x2215;
@@ -62,6 +69,17 @@ pub(crate) enum Operation {
     Read {
         offset: u64,
         length: u64,
+    },
+    SparseRead {
+        offset: u64,
+        length: u64,
+    },
+    Checksum {
+        offset: u64,
+        length: u64,
+        chunk: u32,
+        kind: u8,
+        seed: Vec<u8>,
     },
     Stat,
     AssertVersion(u64),
@@ -123,6 +141,26 @@ pub(crate) enum Operation {
     },
     WriteFull(Vec<u8>),
     Append(Vec<u8>),
+    Rollback(u64),
+    WriteSame {
+        offset: u64,
+        length: u64,
+        pattern: Vec<u8>,
+    },
+    AllocationHint {
+        expected_object_size: u64,
+        expected_write_size: u64,
+    },
+    CopyFrom {
+        source_snapshot: u64,
+        source_version: u64,
+        source: Vec<u8>,
+    },
+    CopyFrom2 {
+        source_snapshot: u64,
+        source_version: u64,
+        source: Vec<u8>,
+    },
     Truncate {
         size: u64,
     },
@@ -141,6 +179,8 @@ impl Operation {
     pub(crate) const fn code(&self) -> u16 {
         match self {
             Self::Read { .. } => OP_READ,
+            Self::SparseRead { .. } => OP_SPARSE_READ,
+            Self::Checksum { .. } => OP_CHECKSUM,
             Self::Stat => OP_STAT,
             Self::Notify { .. } => OP_NOTIFY,
             Self::NotifyAck { .. } => OP_NOTIFY_ACK,
@@ -167,6 +207,11 @@ impl Operation {
             Self::Write { .. } => OP_WRITE,
             Self::WriteFull(_) => OP_WRITE_FULL,
             Self::Append(_) => OP_APPEND,
+            Self::Rollback(_) => OP_ROLLBACK,
+            Self::WriteSame { .. } => OP_WRITE_SAME,
+            Self::AllocationHint { .. } => OP_SET_ALLOCATION_HINT,
+            Self::CopyFrom { .. } => OP_COPY_FROM,
+            Self::CopyFrom2 { .. } => OP_COPY_FROM2,
             Self::Truncate { .. } => OP_TRUNCATE,
             Self::Zero { .. } => OP_ZERO,
             Self::Remove => OP_DELETE,
@@ -195,6 +240,10 @@ impl Operation {
             Self::Write { data, .. }
             | Self::WriteFull(data)
             | Self::Append(data)
+            | Self::Checksum { seed: data, .. }
+            | Self::WriteSame { pattern: data, .. }
+            | Self::CopyFrom { source: data, .. }
+            | Self::CopyFrom2 { source: data, .. }
             | Self::CompareExtent { data, .. }
             | Self::GetXattr(data)
             | Self::RemoveXattr(data)
@@ -225,6 +274,10 @@ impl Operation {
             Self::Write { data, .. }
             | Self::WriteFull(data)
             | Self::Append(data)
+            | Self::Checksum { seed: data, .. }
+            | Self::WriteSame { pattern: data, .. }
+            | Self::CopyFrom { source: data, .. }
+            | Self::CopyFrom2 { source: data, .. }
             | Self::CompareExtent { data, .. }
             | Self::GetXattr(data)
             | Self::RemoveXattr(data)
@@ -246,6 +299,7 @@ impl Operation {
     pub(crate) const fn flags(&self) -> u32 {
         match self {
             Self::Create { exclusive: true } => OP_FLAG_EXCLUSIVE,
+            Self::AllocationHint { .. } => OP_FLAG_FAIL_OK,
             Self::WithFlags { operation, flags } => operation.flags() | *flags,
             _ => 0,
         }
@@ -264,6 +318,8 @@ pub(crate) struct Request<'a> {
     pub(crate) locator: &'a [u8],
     pub(crate) namespace: &'a [u8],
     pub(crate) snapshot: u64,
+    pub(crate) snapshot_sequence: u64,
+    pub(crate) write_snapshots: &'a [u64],
     pub(crate) transaction_id: u64,
     pub(crate) client_global_id: u64,
     pub(crate) client_incarnation: i32,
@@ -329,8 +385,12 @@ pub(crate) fn encode_request(request: &Request<'_>, limits: Limits) -> Result<Me
         || request.operations.is_empty()
         || request.operations.len() > limits.max_operations as usize
         || request.operations.len() > usize::from(u16::MAX)
+        || request.write_snapshots.len() > u32::MAX as usize
     {
         return Err(WireError::LimitExceeded.into());
+    }
+    if !valid_snapshot_context(request.snapshot_sequence, request.write_snapshots) {
+        return Err(WireError::Malformed.into());
     }
     let mutation = request.operations.iter().any(Operation::is_mutation);
     let data_length = request
@@ -376,8 +436,11 @@ pub(crate) fn encode_request(request: &Request<'_>, limits: Limits) -> Result<Me
         encode_operation(&mut front, operation);
     }
     front.u64(request.snapshot);
-    front.u64(0);
-    front.u32(0);
+    front.u64(request.snapshot_sequence);
+    front.u32(u32::try_from(request.write_snapshots.len()).map_err(|_| WireError::LimitExceeded)?);
+    for snapshot in request.write_snapshots {
+        front.u64(*snapshot);
+    }
     front.i32(request.retry);
     front.u64(request.features);
     let front = front.finish()?;
@@ -404,6 +467,12 @@ pub(crate) fn encode_request(request: &Request<'_>, limits: Limits) -> Result<Me
         front,
         data,
         ..Message::default()
+    })
+}
+
+fn valid_snapshot_context(sequence: u64, snapshots: &[u64]) -> bool {
+    snapshots.iter().enumerate().all(|(index, snapshot)| {
+        *snapshot <= sequence && (index == 0 || *snapshot < snapshots[index - 1])
     })
 }
 
@@ -530,18 +599,15 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
     encoder.u16(operation.code());
     encoder.u32(operation.flags());
     let operation = unwrapped_operation(operation);
+    if encode_special_operation(encoder, operation) {
+        encoder.u32(u32::try_from(operation.data_len()).unwrap_or(u32::MAX));
+        return;
+    }
+    if encode_auxiliary_operation(encoder, operation) {
+        encoder.u32(u32::try_from(operation.data_len()).unwrap_or(u32::MAX));
+        return;
+    }
     match operation {
-        Operation::GetXattr(name) | Operation::RemoveXattr(name) => {
-            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
-            encoder.u32(0);
-            encoder.raw(&[0; 20]);
-        }
-        Operation::GetXattrs => encoder.raw(&[0; 28]),
-        Operation::SetXattr { name, value } => {
-            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
-            encoder.u32(u32::try_from(value.len()).unwrap_or(u32::MAX));
-            encoder.raw(&[0; 20]);
-        }
         Operation::AssertVersion(version) => {
             encoder.u64(0);
             encoder.u64(*version);
@@ -574,18 +640,6 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
             encoder.u64(*size);
             encoder.u64(0);
             encoder.raw(&[0; 12]);
-        }
-        Operation::Call {
-            class_length,
-            method_length,
-            input_length,
-            ..
-        } => {
-            encoder.u8(*class_length);
-            encoder.u8(*method_length);
-            encoder.u8(0);
-            encoder.u32(*input_length);
-            encoder.raw(&[0; 21]);
         }
         Operation::Watch {
             cookie,
@@ -623,8 +677,115 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
             encoder.raw(&[0; 12]);
         }
         Operation::WithFlags { .. } => unreachable!("flags wrapper was removed"),
+        Operation::SparseRead { .. }
+        | Operation::Checksum { .. }
+        | Operation::Rollback(_)
+        | Operation::WriteSame { .. }
+        | Operation::AllocationHint { .. }
+        | Operation::CopyFrom { .. }
+        | Operation::CopyFrom2 { .. } => unreachable!("special operation was encoded"),
+        Operation::GetXattr(_)
+        | Operation::GetXattrs
+        | Operation::SetXattr { .. }
+        | Operation::RemoveXattr(_)
+        | Operation::Call { .. } => unreachable!("auxiliary operation was encoded"),
     }
     encoder.u32(u32::try_from(operation.data_len()).unwrap_or(u32::MAX));
+}
+
+fn encode_auxiliary_operation(encoder: &mut Encoder, operation: &Operation) -> bool {
+    match operation {
+        Operation::GetXattr(name) | Operation::RemoveXattr(name) => {
+            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
+            encoder.u32(0);
+            encoder.raw(&[0; 20]);
+        }
+        Operation::GetXattrs => encoder.raw(&[0; 28]),
+        Operation::SetXattr { name, value } => {
+            encoder.u32(u32::try_from(name.len()).unwrap_or(u32::MAX));
+            encoder.u32(u32::try_from(value.len()).unwrap_or(u32::MAX));
+            encoder.raw(&[0; 20]);
+        }
+        Operation::Call {
+            class_length,
+            method_length,
+            input_length,
+            ..
+        } => {
+            encoder.u8(*class_length);
+            encoder.u8(*method_length);
+            encoder.u8(0);
+            encoder.u32(*input_length);
+            encoder.raw(&[0; 21]);
+        }
+        _ => return false,
+    }
+    true
+}
+
+fn encode_special_operation(encoder: &mut Encoder, operation: &Operation) -> bool {
+    match operation {
+        Operation::SparseRead { offset, length } => {
+            encoder.u64(*offset);
+            encoder.u64(*length);
+            encoder.u64(0);
+            encoder.u32(0);
+        }
+        Operation::Checksum {
+            offset,
+            length,
+            chunk,
+            kind,
+            ..
+        } => {
+            encoder.u64(*offset);
+            encoder.u64(*length);
+            encoder.u32(*chunk);
+            encoder.u8(*kind);
+            encoder.raw(&[0; 7]);
+        }
+        Operation::Rollback(snapshot) => {
+            encoder.u64(*snapshot);
+            encoder.raw(&[0; 20]);
+        }
+        Operation::WriteSame {
+            offset,
+            length,
+            pattern,
+        } => {
+            encoder.u64(*offset);
+            encoder.u64(*length);
+            encoder.u64(pattern.len() as u64);
+            encoder.u32(0);
+        }
+        Operation::AllocationHint {
+            expected_object_size,
+            expected_write_size,
+        } => {
+            encoder.u64(*expected_object_size);
+            encoder.u64(*expected_write_size);
+            encoder.u32(0);
+            encoder.raw(&[0; 8]);
+        }
+        Operation::CopyFrom {
+            source_snapshot,
+            source_version,
+            ..
+        }
+        | Operation::CopyFrom2 {
+            source_snapshot,
+            source_version,
+            ..
+        } => {
+            encoder.u64(*source_snapshot);
+            encoder.u64(*source_version);
+            encoder.u8(0);
+            encoder.u32(0);
+            encoder.raw(&[0; 7]);
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn unwrapped_operation(operation: &Operation) -> &Operation {
@@ -699,6 +860,8 @@ mod tests {
             locator: b"locator",
             namespace: b"namespace",
             snapshot: NO_SNAP,
+            snapshot_sequence: 0,
+            write_snapshots: &[],
             transaction_id: 0,
             client_global_id: 0,
             client_incarnation: 0,
@@ -998,6 +1161,117 @@ mod tests {
     }
 
     #[test]
+    fn specialized_descriptors_match_frozen_go_unions() {
+        let cases = [
+            (
+                Operation::SparseRead {
+                    offset: 3,
+                    length: 5,
+                },
+                OP_SPARSE_READ,
+                0,
+                Vec::new(),
+            ),
+            (
+                Operation::Checksum {
+                    offset: 3,
+                    length: 8,
+                    chunk: 4,
+                    kind: 2,
+                    seed: vec![1, 2, 3, 4],
+                },
+                OP_CHECKSUM,
+                0,
+                vec![1, 2, 3, 4],
+            ),
+            (Operation::Rollback(9), OP_ROLLBACK, 0, Vec::new()),
+            (
+                Operation::WriteSame {
+                    offset: 3,
+                    length: 8,
+                    pattern: vec![1, 2],
+                },
+                OP_WRITE_SAME,
+                0,
+                vec![1, 2],
+            ),
+            (
+                Operation::AllocationHint {
+                    expected_object_size: 11,
+                    expected_write_size: 13,
+                },
+                OP_SET_ALLOCATION_HINT,
+                OP_FLAG_FAIL_OK,
+                Vec::new(),
+            ),
+            (
+                Operation::CopyFrom {
+                    source_snapshot: 17,
+                    source_version: 19,
+                    source: vec![5, 6],
+                },
+                OP_COPY_FROM,
+                0,
+                vec![5, 6],
+            ),
+            (
+                Operation::CopyFrom2 {
+                    source_snapshot: 17,
+                    source_version: 19,
+                    source: vec![5, 6, 7],
+                },
+                OP_COPY_FROM2,
+                0,
+                vec![5, 6, 7],
+            ),
+        ];
+        for (operation, opcode, flags, payload) in cases {
+            assert_descriptor(&operation, opcode, flags, &payload);
+        }
+
+        let mut checksum = Encoder::new(64);
+        encode_operation(
+            &mut checksum,
+            &Operation::Checksum {
+                offset: 3,
+                length: 8,
+                chunk: 4,
+                kind: 2,
+                seed: vec![0; 4],
+            },
+        );
+        let checksum = checksum.finish().expect("checksum");
+        assert_eq!(
+            &checksum[6..27],
+            &[
+                3, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 2
+            ]
+        );
+    }
+
+    fn assert_descriptor(operation: &Operation, opcode: u16, flags: u32, payload: &[u8]) {
+        let mut encoder = Encoder::new(64);
+        encode_operation(&mut encoder, operation);
+        let bytes = encoder.finish().expect("descriptor");
+        assert_eq!(bytes.len(), OPERATION_DESCRIPTOR_SIZE);
+        assert_eq!(
+            u16::from_le_bytes(bytes[..2].try_into().expect("opcode")),
+            opcode
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[2..6].try_into().expect("flags")),
+            flags
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[34..].try_into().expect("payload length")),
+            u32::try_from(payload.len()).expect("payload length")
+        );
+        let mut appended = Vec::new();
+        operation.append_data(&mut appended);
+        assert_eq!(appended, payload);
+    }
+
+    #[test]
     fn request_preserves_erasure_shard_and_snapshot_zero() {
         let mut value = request(&[Operation::Stat]);
         value.sharded = true;
@@ -1013,6 +1287,31 @@ mod tests {
                 .expect("snapshot bytes"),
         );
         assert_eq!(snapshot, 0);
+    }
+
+    #[test]
+    fn snapshot_context_requires_descending_ids() {
+        let operations = [Operation::WriteFull(Vec::new())];
+        let mut value = request(&operations);
+        value.snapshot_sequence = 9;
+        value.write_snapshots = &[9, 7, 3];
+        encode_request(&value, LIMITS).expect("valid snapshot context");
+
+        value.write_snapshots = &[7, 7];
+        assert!(matches!(
+            encode_request(&value, LIMITS),
+            Err(Error::Wire(WireError::Malformed))
+        ));
+        value.write_snapshots = &[7, 8];
+        assert!(matches!(
+            encode_request(&value, LIMITS),
+            Err(Error::Wire(WireError::Malformed))
+        ));
+        value.write_snapshots = &[10];
+        assert!(matches!(
+            encode_request(&value, LIMITS),
+            Err(Error::Wire(WireError::Malformed))
+        ));
     }
 
     #[test]

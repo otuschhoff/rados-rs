@@ -51,6 +51,8 @@ pub fn fuzz_mutation_request(data: &[u8]) {
             locator: b"",
             namespace: b"",
             snapshot: u64::MAX - 1,
+            snapshot_sequence: 0,
+            write_snapshots: &[],
             transaction_id: 1,
             client_global_id: 1,
             client_incarnation: 1,
