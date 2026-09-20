@@ -16,6 +16,7 @@ use crate::msgr::session::{Config as SessionConfig, Machine, ReconnectPolicy, Se
 use crate::msgr::supervisor::{Connector, Session};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
+use crate::wire::WireError;
 use tokio::sync::{Mutex as AsyncMutex, broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -23,6 +24,8 @@ use super::backoff::{
     BACKOFF_BLOCK, BACKOFF_UNBLOCK, Backoff, HObject, MESSAGE_OSD_BACKOFF, decode_backoff,
     encode_acknowledgment,
 };
+use super::command::{CommandRequest, decode_command_reply, encode_command_request};
+use super::inconsistent::{self, InconsistentObject};
 use super::messages::{
     FLAG_IGNORE_CACHE, FLAG_IGNORE_OVERLAY, FLAG_ON_DISK, FLAG_PG_OP, FLAG_REDIRECTED, FLAG_RETRY,
     FLAG_RETURN_VECTOR, Limits, OP_FLAG_FAIL_OK, Operation, OperationResult, Reply, Request,
@@ -39,6 +42,7 @@ const READ_REPLY_FRONT_BYTES: u64 = 144;
 const MAX_MUTATIONS: usize = 64;
 const MAX_MUTATION_BYTES: u64 = 64 * 32 * 1024 * 1024;
 const MAX_NOTIFICATION_QUEUE: usize = 65_536;
+const SCRUB_PAGE_SIZE: u64 = 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Target {
@@ -58,6 +62,13 @@ pub(crate) struct ReadResult {
 }
 
 pub(crate) type MutationResult = ReadResult;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CommandResult {
+    pub(crate) result: i32,
+    pub(crate) status: String,
+    pub(crate) output: Vec<u8>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompoundResult {
@@ -297,6 +308,44 @@ impl Client {
         .map_err(|error| map_message_error(error.into()))
     }
 
+    pub(crate) async fn list_inconsistent_objects(
+        &self,
+        monitor: &MonitorClient,
+        pg: PG,
+        options: &OperationOptions,
+    ) -> Result<Vec<InconsistentObject>, Error> {
+        let maximum = u64::from(self.message_limits.max_bytes / 12);
+        if maximum == 0 {
+            return Err(Error::LimitExceeded);
+        }
+        let max_entries = u32::try_from(maximum.min(u64::from(u32::MAX))).unwrap_or(u32::MAX);
+        let mut pager = InconsistentPager::new(maximum);
+        loop {
+            let operation = inconsistent::encode_scrub_list(
+                pager.interval,
+                &pager.start,
+                SCRUB_PAGE_SIZE,
+                self.message_limits.max_bytes,
+            )
+            .map_err(map_wire_error)?;
+            let result = self
+                .execute_pg_routed(monitor, pg, vec![operation], options)
+                .await?;
+            let data = result
+                .operations
+                .into_iter()
+                .next()
+                .ok_or(Error::MalformedReply)?
+                .data;
+            let (next_interval, page) =
+                inconsistent::decode_scrub_list(&data, self.message_limits.max_bytes, max_entries)
+                    .map_err(map_wire_error)?;
+            if pager.push(next_interval, page)? {
+                return Ok(pager.result);
+            }
+        }
+    }
+
     pub(crate) async fn mutate(
         self: &Arc<Self>,
         monitor: Arc<MonitorClient>,
@@ -316,6 +365,108 @@ impl Client {
             data: operation.data,
             version: result.version,
         })
+    }
+
+    pub(crate) async fn osd_command(
+        &self,
+        monitor: &MonitorClient,
+        osd: i32,
+        command: Vec<String>,
+        input: Vec<u8>,
+        options: &OperationOptions,
+    ) -> Result<(CommandResult, Option<Error>), Error> {
+        self.submit_command(monitor, CommandTarget::Osd(osd), command, input, options)
+            .await
+    }
+
+    pub(crate) async fn pg_command(
+        &self,
+        monitor: &MonitorClient,
+        pg: PG,
+        command: Vec<String>,
+        input: Vec<u8>,
+        options: &OperationOptions,
+    ) -> Result<(CommandResult, Option<Error>), Error> {
+        self.submit_command(monitor, CommandTarget::PG(pg), command, input, options)
+            .await
+    }
+
+    async fn submit_command(
+        &self,
+        monitor: &MonitorClient,
+        target: CommandTarget,
+        command: Vec<String>,
+        input: Vec<u8>,
+        options: &OperationOptions,
+    ) -> Result<(CommandResult, Option<Error>), Error> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        if command.is_empty() {
+            return Err(Error::LimitExceeded);
+        }
+        let transaction_id = self.take_transaction_id()?;
+        let fsid = monitor
+            .snapshot()
+            .osdmap()
+            .map_or(crate::maps::Fsid::default(), |map| map.fsid());
+        for _attempt in 0..MAX_ATTEMPTS {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(Error::Closed);
+            }
+            check_options(options)?;
+            let state = monitor.snapshot();
+            let map = state.osdmap().ok_or(Error::NotConnected)?;
+            let route = resolve_command_route(&map, target)?;
+            let message = encode_command_request(
+                &CommandRequest {
+                    fsid,
+                    transaction_id,
+                    command: &command,
+                    input: &input,
+                },
+                self.message_limits.max_bytes,
+            )
+            .map_err(map_command_message_error)?;
+            let session = self.session(route.primary, &route.addresses)?;
+            let reply = match session.submit_direct(message, options).await {
+                Ok(reply) => reply,
+                Err(Error::QueueSaturated) => return Err(Error::QueueSaturated),
+                Err(Error::OutcomeUnknown(cause)) => return Err(Error::OutcomeUnknown(cause)),
+                Err(error) => {
+                    self.invalidate(route.primary, &session);
+                    if matches!(error, Error::Timeout | Error::Cancelled) {
+                        return Err(error);
+                    }
+                    best_effort_refresh_map(monitor, route.epoch, options).await?;
+                    continue;
+                }
+            };
+            let reply = decode_command_reply(&reply, self.message_limits.max_bytes)
+                .map_err(map_command_message_error);
+            let Ok(reply) = reply else {
+                self.invalidate(route.primary, &session);
+                return Err(Error::MalformedReply);
+            };
+            if reply.transaction_id != transaction_id {
+                self.invalidate(route.primary, &session);
+                return Err(Error::MalformedReply);
+            }
+            let result = CommandResult {
+                result: reply.result,
+                status: reply.status,
+                output: reply.output,
+            };
+            if result.result == -11 {
+                best_effort_refresh_map(monitor, route.epoch, options).await?;
+                continue;
+            }
+            if result.result < 0 {
+                return Ok((result.clone(), Some(Error::WireErrno(result.result))));
+            }
+            return Ok((result, None));
+        }
+        Err(Error::RecoveryExhausted)
     }
 
     pub(crate) async fn mutate_operations(
@@ -738,10 +889,7 @@ impl Client {
                 continue;
             }
             if reply.result == -11 {
-                refresh_map(monitor, map.epoch(), options).await?;
-                if mutation {
-                    transaction_id = self.take_transaction_id()?;
-                }
+                best_effort_refresh_map(monitor, map.epoch(), options).await?;
                 continue;
             }
             if validate_operations(&reply, &operations).is_err() {
@@ -757,15 +905,191 @@ impl Client {
                 .iter()
                 .any(|operation| operation.code == -11)
             {
-                refresh_map(monitor, map.epoch(), options).await?;
-                if mutation {
-                    transaction_id = self.take_transaction_id()?;
-                }
+                best_effort_refresh_map(monitor, map.epoch(), options).await?;
                 continue;
             }
             if durable && validate_durable_reply(&reply).is_err() {
                 self.invalidate(placement.acting_primary, &session);
                 return Err(Error::OutcomeUnknown(UnknownCause::Transport));
+            }
+            if reply.result < 0 {
+                return Err(Error::WireErrno(reply.result));
+            }
+            for (operation, operation_reply) in operations.iter().zip(&reply.operations) {
+                if operation_reply.code < 0 && operation.flags() & OP_FLAG_FAIL_OK == 0 {
+                    return Err(Error::WireErrno(operation_reply.code));
+                }
+            }
+            return Ok(CompoundResult {
+                operations: reply.operations,
+                version: reply.version,
+            });
+        }
+        Err(preserve_unknown(Error::RecoveryExhausted, prior_unknown))
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn execute_pg_routed(
+        &self,
+        monitor: &MonitorClient,
+        pg: PG,
+        operations: Vec<Operation>,
+        options: &OperationOptions,
+    ) -> Result<CompoundResult, Error> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        if operations.is_empty() || operations.len() > self.message_limits.max_operations as usize {
+            return Err(Error::LimitExceeded);
+        }
+        let pool_id = i64::try_from(pg.pool).map_err(|_| Error::LimitExceeded)?;
+        let transaction_id = self.take_transaction_id()?;
+        let client_incarnation = self.client_incarnation()?;
+        let retry_unknown = operations.iter().all(allows_unknown_retry);
+        let mut flags = FLAG_PG_OP;
+        if operations.len() > 1 {
+            flags |= FLAG_RETURN_VECTOR;
+        }
+        let mut prior_unknown = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            if self.closed.load(Ordering::Acquire) {
+                return Err(preserve_unknown(Error::Closed, prior_unknown));
+            }
+            check_options(options).map_err(|error| preserve_unknown(error, prior_unknown))?;
+            let state = monitor.snapshot();
+            let map = state
+                .osdmap()
+                .ok_or_else(|| preserve_unknown(Error::NotConnected, prior_unknown))?;
+            if map.pool_by_id(pool_id).is_none() {
+                return Err(preserve_unknown(Error::WireErrno(-2), prior_unknown));
+            }
+            let placement = map
+                .place_raw_hash(pool_id, pg.seed)
+                .map_err(|_| preserve_unknown(Error::NoPrimary, prior_unknown))?;
+            if placement.acting_primary < 0 {
+                return Err(preserve_unknown(Error::NoPrimary, prior_unknown));
+            }
+            let addresses = map
+                .osd_client_addresses(placement.acting_primary)
+                .ok_or_else(|| preserve_unknown(Error::NoPrimary, prior_unknown))?;
+            if attempt > 0 {
+                flags |= FLAG_RETRY;
+            }
+            let session = self.session(placement.acting_primary, addresses)?;
+            let global_id = self
+                .authority
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map_or(0, |authority| authority.metadata().global_id);
+            let message = encode_request(
+                &Request {
+                    map_epoch: map.epoch(),
+                    pg: placement.pg,
+                    shard: placement.primary_shard,
+                    sharded: placement.sharded,
+                    object_hash: placement.raw_hash,
+                    pool_id,
+                    object: &[],
+                    locator: &[],
+                    namespace: &[],
+                    snapshot: super::messages::NO_SNAP,
+                    snapshot_sequence: 0,
+                    write_snapshots: &[],
+                    transaction_id,
+                    client_global_id: global_id,
+                    client_incarnation,
+                    retry: i32::try_from(attempt).map_err(|_| Error::LimitExceeded)?,
+                    flags,
+                    features: GlobalFeatures::OSD_CLIENT.0,
+                    operations: &operations,
+                },
+                self.message_limits,
+            )
+            .map_err(map_message_error)?;
+            let object = HObject {
+                key: Vec::new(),
+                object: Vec::new(),
+                snapshot: super::messages::NO_SNAP,
+                hash: placement.raw_hash,
+                max: false,
+                namespace: Vec::new(),
+                pool: pool_id,
+            };
+            let attempt_deadline = std::time::Instant::now()
+                .checked_add(self.dial_timeout.saturating_add(self.handshake_timeout))
+                .ok_or(Error::LimitExceeded)?;
+            let attempt_options = options.clone().with_deadline(
+                options
+                    .deadline()
+                    .map_or(attempt_deadline, |deadline| deadline.min(attempt_deadline)),
+            );
+            let reply_message = match session
+                .submit(placement.pg, &object, message, false, &attempt_options)
+                .await
+            {
+                Ok(reply) => reply,
+                Err(Error::QueueSaturated) => {
+                    return Err(preserve_unknown(Error::QueueSaturated, prior_unknown));
+                }
+                Err(error) => {
+                    self.invalidate(placement.acting_primary, &session);
+                    if self.closed.load(Ordering::Acquire) {
+                        return Err(preserve_unknown(Error::Closed, prior_unknown));
+                    }
+                    if let Error::OutcomeUnknown(cause) = error {
+                        prior_unknown = Some(prior_unknown.unwrap_or(cause));
+                        if retry_unknown
+                            && wait_for_pg_primary_change(
+                                monitor,
+                                pg,
+                                placement.acting_primary,
+                                map.epoch(),
+                                options,
+                            )
+                            .await
+                        {
+                            continue;
+                        }
+                        return Err(Error::OutcomeUnknown(prior_unknown.unwrap_or(cause)));
+                    }
+                    if matches!(error, Error::Timeout | Error::Cancelled) {
+                        return Err(preserve_unknown(error, prior_unknown));
+                    }
+                    best_effort_refresh_map(monitor, map.epoch(), options)
+                        .await
+                        .map_err(|error| preserve_unknown(error, prior_unknown))?;
+                    continue;
+                }
+            };
+            let Ok(reply) = decode_reply(&reply_message, self.message_limits) else {
+                self.invalidate(placement.acting_primary, &session);
+                return Err(Error::MalformedReply);
+            };
+            if validate_target(&reply, &[], placement.pg, attempt).is_err() {
+                self.invalidate(placement.acting_primary, &session);
+                return Err(Error::MalformedReply);
+            }
+            prior_unknown = None;
+            if reply.redirect.is_some() {
+                flags |= FLAG_REDIRECTED | FLAG_IGNORE_CACHE | FLAG_IGNORE_OVERLAY;
+                continue;
+            }
+            if reply.result == -11 {
+                best_effort_refresh_map(monitor, map.epoch(), options).await?;
+                continue;
+            }
+            if validate_operations(&reply, &operations).is_err() {
+                self.invalidate(placement.acting_primary, &session);
+                return Err(Error::MalformedReply);
+            }
+            if reply
+                .operations
+                .iter()
+                .any(|operation| operation.code == -11)
+            {
+                best_effort_refresh_map(monitor, map.epoch(), options).await?;
+                continue;
             }
             if reply.result < 0 {
                 return Err(Error::WireErrno(reply.result));
@@ -1102,6 +1426,38 @@ impl OSDSession {
         }
     }
 
+    async fn submit_direct(
+        &self,
+        message: Message,
+        options: &OperationOptions,
+    ) -> Result<Message, Error> {
+        #[cfg(test)]
+        {
+            if let Some(hook) = SUBMIT_DIRECT_HOOK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .cloned()
+            {
+                return hook(message);
+            }
+        }
+        let state = self.state.lock().await;
+        if let Some(error) = state.failure {
+            return Err(error);
+        }
+        let admission = admit_with_cancellation(&self.raw, message, options, false).await?;
+        let AdmissionOutcome::Request(mut request) = admission else {
+            let AdmissionOutcome::Reply(reply) = admission else {
+                unreachable!()
+            };
+            return Ok(reply);
+        };
+        request.cancel_on_drop();
+        drop(state);
+        wait_for_request(&mut request, options, false).await
+    }
+
     fn close(&self) {
         self.raw.close();
     }
@@ -1383,7 +1739,7 @@ async fn refresh_map(
 ) -> Result<(), Error> {
     check_options(options)?;
     let deadline = options.deadline().ok_or(Error::Timeout)?;
-    let refresh = monitor.refresh_osdmap(epoch);
+    let refresh = monitor.refresh_osdmap(epoch, options);
     let timeout = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline));
     let cancellation = tokio::time::sleep(CANCELLATION_POLL);
     tokio::pin!(refresh, timeout, cancellation);
@@ -1491,6 +1847,43 @@ fn allows_unknown_retry(operation: &Operation) -> bool {
         Operation::WithFlags { operation, .. } => allows_unknown_retry(operation),
         _ => true,
     }
+}
+
+async fn wait_for_pg_primary_change(
+    monitor: &MonitorClient,
+    pg: PG,
+    previous_primary: i32,
+    mut epoch: u32,
+    options: &OperationOptions,
+) -> bool {
+    let Ok(pool_id) = i64::try_from(pg.pool) else {
+        return false;
+    };
+    for _ in 0..MAX_ATTEMPTS {
+        if check_options(options).is_err() {
+            return false;
+        }
+        let snapshot = monitor.snapshot();
+        let Some(map) = snapshot.osdmap() else {
+            return false;
+        };
+        if let Ok(placement) = map.place_raw_hash(pool_id, pg.seed)
+            && placement.acting_primary != previous_primary
+        {
+            return placement.acting_primary >= 0;
+        }
+        epoch = epoch.max(map.epoch());
+        let refresh_deadline = std::time::Instant::now()
+            .checked_add(TRANSIENT_REFRESH_WAIT)
+            .unwrap_or_else(|| options.deadline().unwrap_or_else(std::time::Instant::now));
+        let bounded = options.clone().with_deadline(
+            options
+                .deadline()
+                .map_or(refresh_deadline, |deadline| deadline.min(refresh_deadline)),
+        );
+        let _ = refresh_map(monitor, epoch, &bounded).await;
+    }
+    false
 }
 
 fn validate_operations(reply: &Reply, operations: &[Operation]) -> Result<(), Error> {
@@ -1664,6 +2057,158 @@ const fn map_session_error(error: SessionError) -> Error {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommandTarget {
+    Osd(i32),
+    PG(PG),
+}
+
+#[derive(Clone, Debug)]
+struct CommandRoute {
+    epoch: u32,
+    primary: i32,
+    addresses: EntityAddrVec,
+}
+
+#[cfg(test)]
+type CommandRouteHook = Arc<dyn Fn(CommandTarget) -> Result<CommandRoute, Error> + Send + Sync>;
+
+#[cfg(test)]
+static COMMAND_ROUTE_HOOK: Mutex<Option<CommandRouteHook>> = Mutex::new(None);
+
+#[cfg(test)]
+type SubmitDirectHook = Arc<dyn Fn(Message) -> Result<Message, Error> + Send + Sync>;
+
+#[cfg(test)]
+static SUBMIT_DIRECT_HOOK: Mutex<Option<SubmitDirectHook>> = Mutex::new(None);
+
+#[cfg(test)]
+fn set_command_route_hook(hook: Option<CommandRouteHook>) {
+    *COMMAND_ROUTE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(test)]
+fn set_submit_direct_hook(hook: Option<SubmitDirectHook>) {
+    *SUBMIT_DIRECT_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+struct InconsistentPager {
+    interval: u32,
+    start: InconsistentObject,
+    maximum: u64,
+    result: Vec<InconsistentObject>,
+}
+
+impl InconsistentPager {
+    fn new(maximum: u64) -> Self {
+        Self {
+            interval: 0,
+            start: InconsistentObject::default(),
+            maximum,
+            result: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, next_interval: u32, page: Vec<InconsistentObject>) -> Result<bool, Error> {
+        if self.interval != 0 && self.interval != next_interval {
+            return Err(Error::WireErrno(-11));
+        }
+        self.interval = next_interval;
+        let page_len = u64::try_from(page.len()).map_err(|_| Error::LimitExceeded)?;
+        if u64::try_from(self.result.len())
+            .map_err(|_| Error::LimitExceeded)?
+            .saturating_add(page_len)
+            > self.maximum
+        {
+            return Err(Error::LimitExceeded);
+        }
+        let next = page.last().cloned();
+        self.result.extend(page);
+        if page_len < SCRUB_PAGE_SIZE {
+            return Ok(true);
+        }
+        let Some(next) = next else {
+            return Err(Error::MalformedReply);
+        };
+        if next.object == self.start.object
+            && next.namespace == self.start.namespace
+            && next.locator == self.start.locator
+            && next.snapshot == self.start.snapshot
+        {
+            return Err(Error::MalformedReply);
+        }
+        self.start = next;
+        Ok(false)
+    }
+}
+
+fn resolve_command_route(
+    map: &crate::maps::OSDMap,
+    target: CommandTarget,
+) -> Result<CommandRoute, Error> {
+    #[cfg(test)]
+    {
+        if let Some(hook) = COMMAND_ROUTE_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .cloned()
+        {
+            return hook(target);
+        }
+    }
+    match target {
+        CommandTarget::Osd(id) => {
+            let addresses = map.osd_client_addresses(id).ok_or(Error::NoPrimary)?;
+            Ok(CommandRoute {
+                epoch: map.epoch(),
+                primary: id,
+                addresses: addresses.clone(),
+            })
+        }
+        CommandTarget::PG(pg) => {
+            if i64::try_from(pg.pool)
+                .ok()
+                .and_then(|pool| map.pool_by_id(pool))
+                .is_none()
+            {
+                return Err(Error::WireErrno(-2));
+            }
+            let placement = map
+                .place_raw_hash(
+                    i64::try_from(pg.pool).map_err(|_| Error::LimitExceeded)?,
+                    pg.seed,
+                )
+                .map_err(|_| Error::NoPrimary)?;
+            if placement.acting_primary < 0 {
+                return Err(Error::NoPrimary);
+            }
+            let addresses = map
+                .osd_client_addresses(placement.acting_primary)
+                .ok_or(Error::NoPrimary)?;
+            Ok(CommandRoute {
+                epoch: map.epoch(),
+                primary: placement.acting_primary,
+                addresses: addresses.clone(),
+            })
+        }
+    }
+}
+
+const fn map_command_message_error(error: super::command::Error) -> Error {
+    match error {
+        super::command::Error::Wire(WireError::LimitExceeded) => Error::LimitExceeded,
+        super::command::Error::Wire(WireError::Malformed)
+        | super::command::Error::MalformedReply => Error::MalformedReply,
+        super::command::Error::Wire(WireError::UnsupportedVersion { .. })
+        | super::command::Error::UnsupportedVersion => Error::Unsupported,
+    }
+}
+
 fn map_message_error(error: super::messages::Error) -> Error {
     match error {
         super::messages::Error::Wire(crate::wire::WireError::LimitExceeded) => Error::LimitExceeded,
@@ -1676,16 +2221,41 @@ fn map_message_error(error: super::messages::Error) -> Error {
     }
 }
 
+const fn map_wire_error(error: WireError) -> Error {
+    match error {
+        WireError::LimitExceeded => Error::LimitExceeded,
+        WireError::Malformed => Error::MalformedReply,
+        WireError::UnsupportedVersion { .. } => Error::Unsupported,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
     use tokio::io::{AsyncWriteExt, DuplexStream, duplex};
+    use tokio::sync::{Notify, mpsc};
 
     use super::*;
+    use crate::cephx::connector::Config as ConnectorConfig;
+    use crate::cephx::core::{SERVICE_AUTH, TicketBlob};
+    use crate::cephx::crypto::Limits as CephxLimits;
+    use crate::maps::Limits as MapLimits;
+    use crate::mon::client::{
+        MonitorConfig, MonitorError, MonitorSession, OpenedMonitorSession, SessionFactory,
+    };
+    use crate::mon::messages::{
+        MESSAGE_MON_MAP, MESSAGE_MON_SUBSCRIBE_ACK, MESSAGE_OSD_MAP, MessageLimits,
+    };
+    use crate::mon::seeds::Endpoint;
     use crate::msgr::frame::{CrcCodec, Tag};
     use crate::msgr::message::{MessageHeader, MessageLengths};
     use crate::msgr::supervisor::ConnectionSetup;
     use crate::msgr::transport::Codec;
     use crate::osd::backoff::encode_for_test;
+
+    static COMMAND_HOOK_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    use crate::wire::Encoder;
 
     const FRAME_TEST_LIMITS: FrameLimits = FrameLimits {
         max_segment_bytes: 4096,
@@ -1699,6 +2269,382 @@ mod tests {
     };
     const TEST_OSD_OP: u16 = 42;
     const TEST_OSD_OP_REPLY: u16 = 43;
+
+    const TEST_COMMAND_REPLY: u16 = 98;
+    const TEST_KEY: &str = "AQB7AAAAyAEAABAAMTIzNDU2Nzg5MDEyMzQ1Ng==";
+
+    type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+    struct FakeMonitorSession {
+        sent: mpsc::Sender<Message>,
+        incoming: AsyncMutex<mpsc::Receiver<Message>>,
+        failure: AsyncMutex<mpsc::Receiver<SessionError>>,
+        closed: AtomicBool,
+        closed_notify: Notify,
+    }
+
+    impl MonitorSession for FakeMonitorSession {
+        fn send(&self, message: Message) -> BoxFuture<'_, Result<(), SessionError>> {
+            Box::pin(async move {
+                self.sent
+                    .send(message)
+                    .await
+                    .map_err(|_| SessionError::Closed)
+            })
+        }
+
+        fn next_incoming(&self) -> BoxFuture<'_, Option<Message>> {
+            Box::pin(async move { self.incoming.lock().await.recv().await })
+        }
+
+        fn next_failure(&self) -> BoxFuture<'_, SessionError> {
+            Box::pin(async move {
+                tokio::select! {
+                    value = async { self.failure.lock().await.recv().await } => {
+                        value.unwrap_or(SessionError::Closed)
+                    }
+                    () = self.closed_notify.notified() => SessionError::Closed,
+                }
+            })
+        }
+
+        fn close(&self) {
+            self.closed.store(true, Ordering::Release);
+            self.closed_notify.notify_waiters();
+        }
+
+        fn shutdown(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async move { self.close() })
+        }
+    }
+
+    struct FakeMonitorHandle {
+        incoming: mpsc::Sender<Message>,
+        _failure: mpsc::Sender<SessionError>,
+        sent: AsyncMutex<mpsc::Receiver<Message>>,
+    }
+
+    fn fake_monitor_session() -> (OpenedMonitorSession, Arc<FakeMonitorHandle>) {
+        let (sent_tx, sent_rx) = mpsc::channel(16);
+        let (incoming_tx, incoming_rx) = mpsc::channel(16);
+        let (failure_tx, failure_rx) = mpsc::channel(2);
+        let session = Arc::new(FakeMonitorSession {
+            sent: sent_tx,
+            incoming: AsyncMutex::new(incoming_rx),
+            failure: AsyncMutex::new(failure_rx),
+            closed: AtomicBool::new(false),
+            closed_notify: Notify::new(),
+        });
+        let handle = Arc::new(FakeMonitorHandle {
+            incoming: incoming_tx,
+            _failure: failure_tx,
+            sent: AsyncMutex::new(sent_rx),
+        });
+        (
+            OpenedMonitorSession {
+                session,
+                global_id: 42,
+                client_addresses: EntityAddrVec(Vec::new()),
+            },
+            handle,
+        )
+    }
+
+    fn map_limits() -> MapLimits {
+        MapLimits {
+            max_bytes: 32 << 20,
+            max_monitors: 64,
+            max_addresses: 64,
+            max_locations: 64,
+            max_pools: 4096,
+            max_osds: 65_536,
+            max_pg_mappings: 1 << 20,
+            max_collection_entries: 1 << 20,
+        }
+    }
+
+    fn endpoint(octet: u8) -> Endpoint {
+        let address = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, octet), 3300));
+        Endpoint {
+            address,
+            entity_address: EntityAddr::ipv4_v2(address).expect("test endpoint"),
+            priority: 0,
+            weight: 0,
+        }
+    }
+
+    fn monitor_config() -> MonitorConfig {
+        MonitorConfig {
+            seeds: vec![endpoint(1), endpoint(2)],
+            expected_fsid: None,
+            hostname: "test-host".to_owned(),
+            map_limits: map_limits(),
+            message_limits: MessageLimits {
+                max_bytes: 32 << 20,
+                max_maps: 16,
+            },
+            max_seed_attempts: 2,
+            history_limit: 2,
+            operation_timeout: Duration::from_secs(1),
+            retry_delay: Duration::ZERO,
+            subscribe_period: Duration::from_secs(60),
+            error_capacity: 8,
+        }
+    }
+
+    fn front_message(
+        message_type: u16,
+        version: u16,
+        compat_version: u16,
+        front: Vec<u8>,
+    ) -> Message {
+        Message {
+            header: MessageHeader {
+                message_type,
+                version,
+                compat_version,
+                ..MessageHeader::default()
+            },
+            lengths: MessageLengths {
+                front: u32::try_from(front.len()).expect("test message length"),
+                ..MessageLengths::default()
+            },
+            front,
+            ..Message::default()
+        }
+    }
+
+    fn ack(fsid: crate::maps::Fsid) -> Message {
+        let mut encoder = Encoder::new(64);
+        encoder.u32(30);
+        encoder.raw(&fsid.0);
+        front_message(
+            MESSAGE_MON_SUBSCRIBE_ACK,
+            1,
+            1,
+            encoder.finish().expect("subscribe ack"),
+        )
+    }
+
+    fn monmap_message(bytes: &[u8]) -> Message {
+        let mut encoder = Encoder::new((bytes.len() + 4) * 2);
+        encoder.bytes(bytes);
+        front_message(
+            MESSAGE_MON_MAP,
+            1,
+            1,
+            encoder.finish().expect("monmap message"),
+        )
+    }
+
+    fn osdmap_message(
+        fsid: crate::maps::Fsid,
+        incrementals: &[(u32, Vec<u8>)],
+        full_maps: &[(u32, Vec<u8>)],
+        newest: u32,
+    ) -> Message {
+        let size = incrementals
+            .iter()
+            .chain(full_maps)
+            .map(|(_, value)| value.len())
+            .sum::<usize>()
+            + 256;
+        let mut encoder = Encoder::new(size * 2);
+        encoder.raw(&fsid.0);
+        encoder.u32(u32::try_from(incrementals.len()).expect("incremental count"));
+        for (epoch, bytes) in incrementals {
+            encoder.u32(*epoch);
+            encoder.bytes(bytes);
+        }
+        encoder.u32(u32::try_from(full_maps.len()).expect("full map count"));
+        for (epoch, bytes) in full_maps {
+            encoder.u32(*epoch);
+            encoder.bytes(bytes);
+        }
+        encoder.u32(0);
+        encoder.u32(newest);
+        front_message(
+            MESSAGE_OSD_MAP,
+            3,
+            1,
+            encoder.finish().expect("osdmap message"),
+        )
+    }
+
+    fn command_reply_message(
+        transaction_id: u64,
+        result: i32,
+        status: &str,
+        output: &[u8],
+    ) -> Message {
+        let mut encoder = Encoder::new(256 + status.len());
+        encoder.i32(result);
+        encoder.string(status);
+        let front = encoder.finish().expect("command reply front");
+        Message {
+            header: MessageHeader {
+                transaction_id,
+                message_type: TEST_COMMAND_REPLY,
+                version: 1,
+                compat_version: 1,
+                ..MessageHeader::default()
+            },
+            lengths: MessageLengths {
+                front: u32::try_from(front.len()).expect("front length"),
+                data: u32::try_from(output.len()).expect("data length"),
+                ..MessageLengths::default()
+            },
+            front,
+            data: output.to_vec(),
+            ..Message::default()
+        }
+    }
+
+    fn test_authority() -> Arc<MonitorConnector> {
+        let credential = crate::cephx::parse_key("client.test", TEST_KEY, 64).expect("credential");
+        let address = address();
+        Arc::new(
+            MonitorConnector::new(ConnectorConfig {
+                credential,
+                target_address: address,
+                message_limits: FRAME_TEST_LIMITS,
+                cephx_limits: CephxLimits::default(),
+                handshake_timeout: Duration::from_secs(1),
+                max_banner_payload: 64,
+                requested_keys: SERVICE_AUTH,
+                allow_crc: true,
+                global_id: 0,
+                old_ticket: TicketBlob {
+                    secret_id: 0,
+                    blob: Vec::new(),
+                },
+                now: Arc::new(|| Duration::from_secs(0)),
+                challenge: Arc::new(|| Ok(0x0102_0304_0506_0708)),
+            })
+            .expect("authority"),
+        )
+    }
+
+    fn install_session(
+        client: &Client,
+        authority: &Arc<MonitorConnector>,
+        osd: i32,
+        addresses: &EntityAddrVec,
+        session: Arc<OSDSession>,
+    ) {
+        let endpoint = addresses
+            .0
+            .iter()
+            .find_map(|address| address.endpoint().filter(|value| value.port() != 0))
+            .expect("routable endpoint");
+        client
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                osd,
+                SessionEntry {
+                    endpoint,
+                    authority: Arc::clone(authority),
+                    session,
+                },
+            );
+    }
+
+    fn routable_addresses(port: u16) -> EntityAddrVec {
+        EntityAddrVec(vec![
+            EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)))
+                .expect("routable test address"),
+        ])
+    }
+
+    struct CommandRouteHookGuard;
+
+    impl CommandRouteHookGuard {
+        fn install(hook: CommandRouteHook) -> Self {
+            set_command_route_hook(Some(hook));
+            Self
+        }
+    }
+
+    impl Drop for CommandRouteHookGuard {
+        fn drop(&mut self) {
+            set_command_route_hook(None);
+        }
+    }
+
+    struct SubmitDirectHookGuard;
+
+    impl SubmitDirectHookGuard {
+        fn install(hook: SubmitDirectHook) -> Self {
+            set_submit_direct_hook(Some(hook));
+            Self
+        }
+    }
+
+    impl Drop for SubmitDirectHookGuard {
+        fn drop(&mut self) {
+            set_submit_direct_hook(None);
+        }
+    }
+
+    async fn start_monitor_with_fixture_map() -> (
+        Arc<MonitorClient>,
+        Arc<FakeMonitorHandle>,
+        crate::maps::OSDMap,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
+        let (opened, handle) = fake_monitor_session();
+        let opened = Arc::new(AsyncMutex::new(Some(opened)));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move {
+                opened
+                    .lock()
+                    .await
+                    .take()
+                    .ok_or(MonitorError::AttemptsExhausted)
+            })
+        });
+        let monitor =
+            Arc::new(MonitorClient::spawn(monitor_config(), factory).expect("monitor client"));
+        handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("initial subscribe");
+        let monmap_bytes = include_bytes!("../../testdata/p04/monmap-v9.bin").to_vec();
+        let osdmap_bytes = include_bytes!("../../testdata/p04/osdmap-v8.bin").to_vec();
+        let map = crate::maps::decode_osdmap(&osdmap_bytes, map_limits()).expect("fixture OSD map");
+        handle
+            .incoming
+            .send(ack(map.fsid()))
+            .await
+            .expect("subscription ack");
+        handle
+            .incoming
+            .send(monmap_message(&monmap_bytes))
+            .await
+            .expect("monmap");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), osdmap_bytes.clone())],
+                map.epoch(),
+            ))
+            .await
+            .expect("osdmap");
+        tokio::time::timeout(Duration::from_secs(1), monitor.wait_ready())
+            .await
+            .expect("ready timeout")
+            .expect("ready");
+        (monitor, handle, map, monmap_bytes, osdmap_bytes)
+    }
 
     #[test]
     fn read_target_keeps_read_snapshot_but_drops_write_context() {
@@ -1943,6 +2889,68 @@ mod tests {
             flags: 0,
         }));
         assert!(allows_unknown_retry(&Operation::WriteFull(Vec::new())));
+    }
+
+    fn scrub_item(name: &[u8]) -> InconsistentObject {
+        InconsistentObject {
+            object: name.to_vec(),
+            namespace: b"ns".to_vec(),
+            locator: b"loc".to_vec(),
+            snapshot: 1,
+            shards: vec![1],
+            errors: vec!["x".to_owned()],
+        }
+    }
+
+    #[test]
+    fn inconsistent_pager_finishes_short_page_and_enforces_bounds() {
+        let mut pager = InconsistentPager::new(2);
+        assert!(pager.push(7, vec![scrub_item(b"a")]).expect("short page"));
+        assert_eq!(pager.result.len(), 1);
+
+        let mut bounded = InconsistentPager::new(1);
+        assert_eq!(
+            bounded.push(1, vec![scrub_item(b"a"), scrub_item(b"b")]),
+            Err(Error::LimitExceeded)
+        );
+    }
+
+    #[test]
+    fn inconsistent_pager_rejects_interval_changes_and_nonadvancing_cursor() {
+        let full_len = usize::try_from(SCRUB_PAGE_SIZE).expect("page size fits usize");
+        let mut interval = InconsistentPager::new(3000);
+        let full = vec![scrub_item(b"a"); full_len];
+        assert!(!interval.push(9, full).expect("first page"));
+        assert_eq!(
+            interval.push(10, vec![scrub_item(b"b")]),
+            Err(Error::WireErrno(-11))
+        );
+
+        let mut cursor = InconsistentPager::new(3000);
+        let mut first = vec![scrub_item(b"a"); full_len];
+        first[full_len - 1] = scrub_item(b"last");
+        assert!(!cursor.push(3, first).expect("first page"));
+        let mut repeat = vec![scrub_item(b"b"); full_len];
+        repeat[0] = scrub_item(b"last");
+        repeat[full_len - 1] = scrub_item(b"last");
+        assert_eq!(cursor.push(3, repeat), Err(Error::MalformedReply));
+    }
+
+    #[test]
+    fn inconsistent_pager_appends_nonoverlapping_pages() {
+        let full_len = usize::try_from(SCRUB_PAGE_SIZE).expect("page size fits usize");
+        let mut pager = InconsistentPager::new(4000);
+        let mut first = vec![scrub_item(b"a"); full_len];
+        first[full_len - 1] = scrub_item(b"cursor");
+        assert!(!pager.push(11, first).expect("first page"));
+
+        let mut second = vec![scrub_item(b"b"); full_len];
+        second[0] = scrub_item(b"next");
+        second[full_len - 1] = scrub_item(b"second-cursor");
+        assert!(!pager.push(11, second).expect("second page"));
+        assert_eq!(pager.result.len(), full_len * 2);
+        assert_eq!(pager.result[full_len].object, b"next");
+        assert_eq!(pager.start.object, b"second-cursor");
     }
 
     fn request_message() -> Message {
@@ -2407,5 +3415,447 @@ mod tests {
             validate_durable_reply(&reply),
             Err(Error::OutcomeUnknown(UnknownCause::Transport))
         );
+    }
+
+    #[tokio::test]
+    async fn submit_command_retries_eagain_with_same_nonzero_transaction_id() {
+        let _hook_lock = COMMAND_HOOK_TEST_LOCK.lock().await;
+        let (monitor, handle, map, _monmap, osdmap_bytes) = start_monitor_with_fixture_map().await;
+        let authority = test_authority();
+        let client = Client::new(
+            Arc::new(RwLock::new(Some(Arc::clone(&authority)))),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            true,
+            1,
+        );
+        let osd = 17;
+        let addresses = routable_addresses(4317);
+        let map_epoch = map.epoch();
+        let map_fsid = map.fsid();
+        let addresses_for_hook = addresses.clone();
+        let _route_hook = CommandRouteHookGuard::install(Arc::new(move |target| {
+            assert_eq!(target, CommandTarget::Osd(osd));
+            Ok(CommandRoute {
+                epoch: map_epoch,
+                primary: osd,
+                addresses: addresses_for_hook.clone(),
+            })
+        }));
+        let tids = Arc::new(Mutex::new(Vec::new()));
+        let submits = Arc::new(AtomicU64::new(0));
+        let tids_for_hook = Arc::clone(&tids);
+        let submits_for_hook = Arc::clone(&submits);
+        let _submit_hook = SubmitDirectHookGuard::install(Arc::new(move |message| {
+            tids_for_hook
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(message.header.transaction_id);
+            let attempt = submits_for_hook.fetch_add(1, Ordering::Relaxed);
+            Ok(if attempt == 0 {
+                command_reply_message(message.header.transaction_id, -11, "again", b"recover")
+            } else {
+                command_reply_message(message.header.transaction_id, 0, "ok", b"done")
+            })
+        }));
+        let (wire_client, _wire_server) = duplex(8192);
+        let session = OSDSession::spawn(
+            raw_session(wire_client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        install_session(&client, &authority, osd, &addresses, Arc::clone(&session));
+
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let monitor_for_call = Arc::clone(&monitor);
+        let command = tokio::spawn(async move {
+            client
+                .osd_command(
+                    &monitor_for_call,
+                    osd,
+                    vec!["{\"prefix\":\"status\"}".to_owned()],
+                    b"in".to_vec(),
+                    &options,
+                )
+                .await
+        });
+
+        handle
+            .sent
+            .lock()
+            .await
+            .recv()
+            .await
+            .expect("best-effort refresh subscribe");
+        handle
+            .incoming
+            .send(osdmap_message(
+                map_fsid,
+                &[],
+                &[(map_epoch, osdmap_bytes)],
+                map_epoch,
+            ))
+            .await
+            .expect("refresh map publication");
+
+        let (result, error) = command.await.expect("join").expect("command result");
+        assert_eq!(result.status, "ok");
+        assert_eq!(result.output, b"done");
+        assert_eq!(error, None);
+        let captured = tids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(captured.len(), 2);
+        assert_ne!(captured[0], 0);
+        assert_eq!(captured[0], captured[1]);
+
+        session.shutdown().await;
+        monitor.close();
+        monitor.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn submit_pg_command_reroutes_to_new_primary_after_map_change_retry() {
+        let _hook_lock = COMMAND_HOOK_TEST_LOCK.lock().await;
+        let (monitor, handle, old_map, _monmap, _osdmap) = start_monitor_with_fixture_map().await;
+        let incremental_bytes =
+            include_bytes!("../../testdata/p04/osdmap-incremental-v8.bin").to_vec();
+        let incremental = crate::maps::decode_osdmap_incremental(&incremental_bytes, map_limits())
+            .expect("fixture incremental");
+        let authority = test_authority();
+        let client = Client::new(
+            Arc::new(RwLock::new(Some(Arc::clone(&authority)))),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            true,
+            1,
+        );
+        let old_primary = 101;
+        let new_primary = 202;
+        let old_addresses = routable_addresses(5101);
+        let new_addresses = routable_addresses(5202);
+        let pg = PG {
+            pool: 1,
+            seed: 7,
+            preferred: -1,
+        };
+        let attempts = Arc::new(AtomicU64::new(0));
+        let attempts_for_hook = Arc::clone(&attempts);
+        let old_addresses_for_hook = old_addresses.clone();
+        let new_addresses_for_hook = new_addresses.clone();
+        let old_epoch = old_map.epoch();
+        let new_epoch = incremental.epoch();
+        let _route_hook = CommandRouteHookGuard::install(Arc::new(move |target| {
+            assert_eq!(target, CommandTarget::PG(pg));
+            if attempts_for_hook.fetch_add(1, Ordering::Relaxed) == 0 {
+                Ok(CommandRoute {
+                    epoch: old_epoch,
+                    primary: old_primary,
+                    addresses: old_addresses_for_hook.clone(),
+                })
+            } else {
+                Ok(CommandRoute {
+                    epoch: new_epoch,
+                    primary: new_primary,
+                    addresses: new_addresses_for_hook.clone(),
+                })
+            }
+        }));
+        let routed = Arc::new(Mutex::new(Vec::new()));
+        let routed_for_hook = Arc::clone(&routed);
+        let submits = Arc::new(AtomicU64::new(0));
+        let submits_for_hook = Arc::clone(&submits);
+        let _submit_hook = SubmitDirectHookGuard::install(Arc::new(move |message| {
+            let idx = submits_for_hook.fetch_add(1, Ordering::Relaxed);
+            let osd = if idx == 0 { old_primary } else { new_primary };
+            routed_for_hook
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((osd, message.header.transaction_id));
+            Ok(if idx == 0 {
+                command_reply_message(message.header.transaction_id, -11, "again", b"")
+            } else {
+                command_reply_message(message.header.transaction_id, 0, "ok", b"rerouted")
+            })
+        }));
+        let (old_wire_client, _old_wire_server) = duplex(8192);
+        let (new_wire_client, _new_wire_server) = duplex(8192);
+        let old_session = OSDSession::spawn(
+            raw_session(old_wire_client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        let new_session = OSDSession::spawn(
+            raw_session(new_wire_client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        install_session(
+            &client,
+            &authority,
+            old_primary,
+            &old_addresses,
+            Arc::clone(&old_session),
+        );
+        install_session(
+            &client,
+            &authority,
+            new_primary,
+            &new_addresses,
+            Arc::clone(&new_session),
+        );
+
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        let monitor_for_call = Arc::clone(&monitor);
+        let op = tokio::spawn(async move {
+            client
+                .pg_command(
+                    &monitor_for_call,
+                    pg,
+                    vec!["{\"prefix\":\"pg dump\"}".to_owned()],
+                    Vec::new(),
+                    &options,
+                )
+                .await
+        });
+        handle
+            .incoming
+            .send(osdmap_message(
+                old_map.fsid(),
+                &[(incremental.epoch(), incremental_bytes)],
+                &[],
+                incremental.epoch(),
+            ))
+            .await
+            .expect("publish incremental map");
+
+        let (result, error) = op.await.expect("join").expect("command result");
+        assert_eq!(result.status, "ok");
+        assert_eq!(result.output, b"rerouted");
+        assert_eq!(error, None);
+        let routed = routed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(routed.len(), 2);
+        assert_eq!(routed[0].0, old_primary);
+        assert_eq!(routed[1].0, new_primary);
+        assert_eq!(routed[0].1, routed[1].1);
+
+        old_session.shutdown().await;
+        new_session.shutdown().await;
+        monitor.close();
+        monitor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn submit_command_outcome_unknown_returns_immediately_without_replay() {
+        let _hook_lock = COMMAND_HOOK_TEST_LOCK.lock().await;
+        let (monitor, _handle, map, _monmap, _osdmap) = start_monitor_with_fixture_map().await;
+        let authority = test_authority();
+        let client = Client::new(
+            Arc::new(RwLock::new(Some(Arc::clone(&authority)))),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            true,
+            1,
+        );
+        let osd = 29;
+        let addresses = routable_addresses(4329);
+        let addresses_for_hook = addresses.clone();
+        let map_epoch = map.epoch();
+        let _route_hook = CommandRouteHookGuard::install(Arc::new(move |target| {
+            assert_eq!(target, CommandTarget::Osd(osd));
+            Ok(CommandRoute {
+                epoch: map_epoch,
+                primary: osd,
+                addresses: addresses_for_hook.clone(),
+            })
+        }));
+        let submits = Arc::new(AtomicU64::new(0));
+        let submits_for_hook = Arc::clone(&submits);
+        let _submit_hook = SubmitDirectHookGuard::install(Arc::new(move |_message| {
+            submits_for_hook.fetch_add(1, Ordering::Relaxed);
+            Err(Error::OutcomeUnknown(UnknownCause::Transport))
+        }));
+        let (wire_client, _wire_server) = duplex(8192);
+        let session = OSDSession::spawn(
+            raw_session(wire_client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        install_session(&client, &authority, osd, &addresses, Arc::clone(&session));
+
+        let outcome = client
+            .osd_command(
+                &monitor,
+                osd,
+                vec!["{\"prefix\":\"status\"}".to_owned()],
+                Vec::new(),
+                &OperationOptions::new()
+                    .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
+            )
+            .await;
+        assert_eq!(outcome, Err(Error::OutcomeUnknown(UnknownCause::Transport)));
+        assert_eq!(submits.load(Ordering::Relaxed), 1);
+
+        session.shutdown().await;
+        monitor.close();
+        monitor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn submit_command_malformed_or_tid_mismatch_invalidates_and_is_terminal() {
+        let _hook_lock = COMMAND_HOOK_TEST_LOCK.lock().await;
+        for mismatched_tid in [false, true] {
+            let (monitor, _handle, map, _monmap, _osdmap) = start_monitor_with_fixture_map().await;
+            let authority = test_authority();
+            let client = Arc::new(Client::new(
+                Arc::new(RwLock::new(Some(Arc::clone(&authority)))),
+                FRAME_TEST_LIMITS,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                true,
+                1,
+            ));
+            let osd = 31;
+            let addresses = routable_addresses(4331);
+            let addresses_for_hook = addresses.clone();
+            let map_epoch = map.epoch();
+            let _route_hook = CommandRouteHookGuard::install(Arc::new(move |target| {
+                assert_eq!(target, CommandTarget::Osd(osd));
+                Ok(CommandRoute {
+                    epoch: map_epoch,
+                    primary: osd,
+                    addresses: addresses_for_hook.clone(),
+                })
+            }));
+            let _submit_hook = SubmitDirectHookGuard::install(Arc::new(move |message| {
+                Ok(if mismatched_tid {
+                    command_reply_message(
+                        message.header.transaction_id.saturating_add(1),
+                        0,
+                        "ok",
+                        b"",
+                    )
+                } else {
+                    let mut malformed =
+                        command_reply_message(message.header.transaction_id, 0, "ok", b"payload");
+                    malformed.lengths.front = malformed.lengths.front.saturating_add(1);
+                    malformed
+                })
+            }));
+            let (wire_client, _wire_server) = duplex(8192);
+            let session = OSDSession::spawn(
+                raw_session(wire_client),
+                broadcast::channel(4).0,
+                MESSAGE_TEST_LIMITS,
+                Duration::from_secs(1),
+            );
+            install_session(&client, &authority, osd, &addresses, Arc::clone(&session));
+
+            let client_for_call = Arc::clone(&client);
+            let monitor_for_call = Arc::clone(&monitor);
+            let op = tokio::spawn(async move {
+                client_for_call
+                    .osd_command(
+                        &monitor_for_call,
+                        osd,
+                        vec!["{\"prefix\":\"status\"}".to_owned()],
+                        Vec::new(),
+                        &OperationOptions::new()
+                            .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
+                    )
+                    .await
+            });
+
+            assert_eq!(op.await.expect("join"), Err(Error::MalformedReply));
+            assert!(
+                client
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(&osd)
+                    .is_none()
+            );
+
+            session.shutdown().await;
+            monitor.close();
+            monitor.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_command_negative_errno_preserves_status_and_output() {
+        let _hook_lock = COMMAND_HOOK_TEST_LOCK.lock().await;
+        let (monitor, _handle, map, _monmap, _osdmap) = start_monitor_with_fixture_map().await;
+        let authority = test_authority();
+        let client = Client::new(
+            Arc::new(RwLock::new(Some(Arc::clone(&authority)))),
+            FRAME_TEST_LIMITS,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            true,
+            1,
+        );
+        let osd = 37;
+        let addresses = routable_addresses(4337);
+        let addresses_for_hook = addresses.clone();
+        let _route_hook = CommandRouteHookGuard::install(Arc::new(move |target| {
+            assert_eq!(target, CommandTarget::Osd(osd));
+            Ok(CommandRoute {
+                epoch: map.epoch(),
+                primary: osd,
+                addresses: addresses_for_hook.clone(),
+            })
+        }));
+        let _submit_hook = SubmitDirectHookGuard::install(Arc::new(move |message| {
+            Ok(command_reply_message(
+                message.header.transaction_id,
+                -13,
+                "permission denied",
+                b"partial",
+            ))
+        }));
+        let (wire_client, _wire_server) = duplex(8192);
+        let session = OSDSession::spawn(
+            raw_session(wire_client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        install_session(&client, &authority, osd, &addresses, Arc::clone(&session));
+
+        let pending = tokio::spawn(async move {
+            client
+                .osd_command(
+                    &monitor,
+                    osd,
+                    vec!["{\"prefix\":\"status\"}".to_owned()],
+                    b"request".to_vec(),
+                    &OperationOptions::new()
+                        .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
+                )
+                .await
+        });
+
+        let (reply, error) = pending.await.expect("join").expect("command result");
+        assert_eq!(reply.result, -13);
+        assert_eq!(reply.status, "permission denied");
+        assert_eq!(reply.output, b"partial");
+        assert_eq!(error, Some(Error::WireErrno(-13)));
+
+        session.shutdown().await;
     }
 }

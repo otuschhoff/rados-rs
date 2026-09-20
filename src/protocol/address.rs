@@ -60,6 +60,14 @@ impl EntityAddr {
         self
     }
 
+    pub(crate) const fn nonce(&self) -> u32 {
+        self.nonce
+    }
+
+    pub(crate) fn is_v2(&self) -> bool {
+        self.address_type == AddressType::V2
+    }
+
     pub(crate) fn endpoint(&self) -> Option<SocketAddr> {
         let port = u16::from_be_bytes(self.socket_data.get(..2)?.try_into().ok()?);
         match self.family {
@@ -208,6 +216,90 @@ fn socket_data_length(family: u16) -> Result<usize, WireError> {
         AF_INET => Ok(14),
         AF_UNSPEC | AF_INET6 => Ok(26),
         _ => Err(WireError::Malformed),
+    }
+}
+
+pub(crate) fn parse_entity_addr(value: &str) -> Result<EntityAddr, WireError> {
+    let (address_type, body) = if let Some(value) = value.strip_prefix("v1:") {
+        (AddressType::LEGACY, value)
+    } else if let Some(value) = value.strip_prefix("v2:") {
+        (AddressType::V2, value)
+    } else if let Some(value) = value.strip_prefix("any:") {
+        (AddressType::ANY, value)
+    } else {
+        (AddressType::V2, value)
+    };
+    if body == "-" {
+        return Ok(EntityAddr {
+            address_type: AddressType::NONE,
+            nonce: 0,
+            family: AF_UNSPEC,
+            socket_data: vec![0; 26],
+            legacy_encoding: false,
+        });
+    }
+    let (endpoint_text, nonce_text, has_nonce) =
+        if let Some((endpoint, nonce)) = body.split_once('/') {
+            (endpoint, nonce, true)
+        } else {
+            (body, "", false)
+        };
+    if has_nonce && (nonce_text.is_empty() || nonce_text.contains('/')) {
+        return Err(WireError::Malformed);
+    }
+    let nonce = if has_nonce {
+        nonce_text
+            .parse::<u32>()
+            .map_err(|_| WireError::Malformed)?
+    } else {
+        0
+    };
+    let endpoint = parse_entity_endpoint(endpoint_text)?;
+    if matches!(endpoint.ip(), IpAddr::V6(address) if address.to_ipv4_mapped().is_some()) {
+        return Err(WireError::Malformed);
+    }
+    Ok(entity_addr_from_endpoint(address_type, nonce, endpoint))
+}
+
+fn parse_entity_endpoint(value: &str) -> Result<SocketAddr, WireError> {
+    if let Ok(address) = value.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(address, 0));
+    }
+    value
+        .parse::<SocketAddr>()
+        .map_err(|_| WireError::Malformed)
+}
+
+fn entity_addr_from_endpoint(
+    address_type: AddressType,
+    nonce: u32,
+    endpoint: SocketAddr,
+) -> EntityAddr {
+    match endpoint.ip() {
+        IpAddr::V4(address) => {
+            let mut socket_data = vec![0; 14];
+            socket_data[..2].copy_from_slice(&endpoint.port().to_be_bytes());
+            socket_data[2..6].copy_from_slice(&address.octets());
+            EntityAddr {
+                address_type,
+                nonce,
+                family: AF_INET,
+                socket_data,
+                legacy_encoding: false,
+            }
+        }
+        IpAddr::V6(address) => {
+            let mut socket_data = vec![0; 26];
+            socket_data[..2].copy_from_slice(&endpoint.port().to_be_bytes());
+            socket_data[6..22].copy_from_slice(&address.octets());
+            EntityAddr {
+                address_type,
+                nonce,
+                family: AF_INET6,
+                socket_data,
+                legacy_encoding: false,
+            }
+        }
     }
 }
 
@@ -368,6 +460,57 @@ mod tests {
         let decoded = EntityAddr::decode(&mut Decoder::new(&wire, 64)).expect("decoded address");
         assert_eq!(decoded, address);
         assert_eq!(decoded.nonce, 0x1234_5678);
+    }
+
+    #[test]
+    fn parses_entity_addresses_with_prefixes_ports_and_nonces() {
+        let modern = parse_entity_addr("v2:192.0.2.1:6800/7").expect("modern");
+        assert!(modern.is_v2());
+        assert_eq!(modern.nonce(), 7);
+        assert_eq!(
+            modern.endpoint().expect("endpoint").to_string(),
+            "192.0.2.1:6800"
+        );
+
+        let legacy = parse_entity_addr("v1:[2001:db8::1]:6789/2").expect("legacy");
+        assert!(!legacy.is_v2());
+        assert_eq!(legacy.nonce(), 2);
+        assert_eq!(
+            legacy.endpoint().expect("endpoint").to_string(),
+            "[2001:db8::1]:6789"
+        );
+
+        let defaulted = parse_entity_addr("192.0.2.5").expect("defaulted");
+        assert!(defaulted.is_v2());
+        assert_eq!(defaulted.nonce(), 0);
+        assert_eq!(
+            defaulted.endpoint().expect("endpoint").to_string(),
+            "192.0.2.5:0"
+        );
+    }
+
+    #[test]
+    fn parse_entity_addr_rejects_malformed_values() {
+        for value in [
+            "",
+            "v2:host:6800/1",
+            "v2:192.0.2.1:6800/",
+            "v2:192.0.2.1:6800/nope",
+            "v2:192.0.2.1:6800/1/2",
+            "v2:[::ffff:192.0.2.1]:6800/7",
+        ] {
+            assert_eq!(parse_entity_addr(value), Err(WireError::Malformed));
+        }
+    }
+
+    #[test]
+    fn parse_entity_addr_preserves_ipv4_compatible_ipv6() {
+        let address = parse_entity_addr("v2:[::192.0.2.1]:6800/7").expect("compatible IPv6");
+        assert_eq!(address.family, AF_INET6);
+        assert_eq!(
+            address.endpoint().expect("endpoint"),
+            "[::192.0.2.1]:6800".parse::<SocketAddr>().expect("socket")
+        );
     }
 
     #[test]

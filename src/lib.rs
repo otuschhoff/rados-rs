@@ -11,6 +11,8 @@ mod identity;
 #[allow(dead_code)]
 mod maps;
 #[allow(dead_code)]
+mod mgr;
+#[allow(dead_code)]
 mod mon;
 #[allow(dead_code)]
 mod msgr;
@@ -41,6 +43,9 @@ pub mod r10_integration;
 #[cfg(all(feature = "r11-integration", not(rados_packaged_source)))]
 #[doc(hidden)]
 pub mod r11_integration;
+#[cfg(all(feature = "r12-integration", not(rados_packaged_source)))]
+#[doc(hidden)]
+pub mod r12_integration;
 mod types;
 
 pub use client::{Client, ObjectRef, Pool, compare_object_cursors};

@@ -7,9 +7,9 @@ codecs, session state and committed-tree differential verification are complete;
 R04 CephX authentication and secure monitor sessions, R05 configuration/maps,
 R06 exact placement, R07 read-only object I/O, R08 mutation qualification and
 R09 metadata, atomic builders and enumeration, R10 classes, locks and watches,
-and R11 snapshots and specialized object I/O are complete. R11 has fresh
-Rust/Go/native evidence against pinned Ceph 20.2.4 replicated and
-erasure-coded profiles.
+R11 snapshots and specialized object I/O, and R12 administration and parity
+closure are complete. R12 has fresh Rust/Go/native evidence against pinned
+Ceph 20.2.4 monitor, manager, OSD and PG command paths.
 
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
@@ -45,6 +45,13 @@ operations, and pool erasure/alignment capabilities. The live gate passed
 native interoperability and the qualified replicated/erasure-coded operation
 matrix on a pinned three-OSD profile.
 
+The R12 API scope adds cluster and pool statistics, pool lifecycle,
+application metadata, session addresses, blocklisting, monitor/manager/OSD/PG
+commands, and inconsistent-PG/object inspection. Commands return output and
+status even when the server reports an error; dispatched mutations surface an
+unknown outcome instead of being replayed. The parity ledger now explicitly
+classifies every remaining native and frozen-Go row.
+
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
 
@@ -69,6 +76,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R09 metadata, compound and enumeration status](docs/r09/STATUS.md)
 - [R10 classes, locks and watches status](docs/r10/STATUS.md)
 - [R11 snapshots and specialized I/O status](docs/r11/STATUS.md)
+- [R12 administration and parity closure status](docs/r12/STATUS.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)
@@ -99,6 +107,10 @@ Ordinary Rust checks require no Go, Ceph libraries, Docker or network:
 ```sh
 cargo test --workspace --locked
 ```
+
+The runnable [R12 administration example](examples/r12_administration.rs)
+loads `/etc/ceph/ceph.conf` and demonstrates read-only statistics, application
+metadata, and monitor-command handling.
 
 The opt-in differential bridges and their explicit Go checkout are documented
 in the R01, R02, R03 and R04 probe protocols.

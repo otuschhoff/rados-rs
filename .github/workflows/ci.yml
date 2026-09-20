@@ -78,6 +78,10 @@ jobs:
         run: |
           cargo run --locked -p rados-r11-tools --bin rados-r11-verify -- . docs/r11/live-qualification-report.json
           cargo run --locked -p rados-r11-tools --bin rados-r11-verify-fuzz -- . docs/r11/fuzz-validation-report.json
+      - name: Verify checked-in R12 evidence
+        run: |
+          cargo run --locked -p rados-r12-tools --bin rados-r12-verify -- . docs/r12/live-qualification-report.json
+          cargo run --locked -p rados-r12-tools --bin rados-r12-verify-fuzz -- . docs/r12/fuzz-validation-report.json
       - name: Install pinned audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -165,3 +169,9 @@ jobs:
           cargo +nightly-2026-09-01 fuzz run r11_snapshot /tmp/rados-r11-corpus/r11_snapshot -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r11_sparse /tmp/rados-r11-corpus/r11_sparse -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r11_special /tmp/rados-r11-corpus/r11_special -- -max_total_time=10
+      - name: Run administration fuzz smoke tests
+        run: |
+          integration/r12/prepare-fuzz-corpus.sh /tmp/rados-r12-corpus
+          cargo +nightly-2026-09-01 fuzz run r12_command /tmp/rados-r12-corpus/r12_command -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r12_stats /tmp/rados-r12-corpus/r12_stats -- -max_total_time=10
+          cargo +nightly-2026-09-01 fuzz run r12_inconsistent /tmp/rados-r12-corpus/r12_inconsistent -- -max_total_time=10

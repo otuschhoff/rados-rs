@@ -1,6 +1,12 @@
 use crate::cephx::connector;
-use crate::cephx::core::{SERVICE_AUTH, SERVICE_MONITOR, SERVICE_OSD, TicketBlob};
+use crate::cephx::core::{SERVICE_AUTH, SERVICE_MANAGER, SERVICE_MONITOR, SERVICE_OSD, TicketBlob};
 use crate::maps::{Fsid, Limits as MapLimits};
+#[cfg(test)]
+use crate::mgr::client::SessionFactory as ManagerSessionFactory;
+use crate::mgr::client::{
+    Config as ManagerConfig, ManagerClient, ManagerError, Snapshot as ManagerSnapshot,
+    StateSource as ManagerStateSource,
+};
 use crate::mon::client::{
     MonitorClient, MonitorConfig, MonitorError, SessionFactory, authenticated_session_factory,
 };
@@ -11,20 +17,23 @@ use crate::msgr::control::ClientIdent;
 use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::session::{Config as SessionConfig, ReconnectPolicy, SessionError};
 use crate::osd::{
-    Client as OSDClient, ClientError, CompoundResult, HObject, NO_SNAP, OSDMutation,
-    Operation as OSDOperation, Target as OSDTarget, compare_hobject,
+    Client as OSDClient, ClientError, CommandResult as OSDCommandResult, CompoundResult, HObject,
+    NO_SNAP, OSDMutation, Operation as OSDOperation, Target as OSDTarget, compare_hobject,
+    parse_pg,
 };
 use crate::osd::{lock, metadata, watch as osd_watch};
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::{
-    ChecksumType, ClassResult, Config, Error, ErrorKind, LocatorKey, LockMode, LockOptions, Locker,
-    Namespace, NotifyAcknowledgment, NotifyReply, NotifyTimeout, ObjectEntry, ObjectInfo,
-    ObjectName, ObjectPage, OmapEntry, OpResult, OperationOptions, Page, ReadOp, Result,
+    ChecksumType, ClassResult, ClusterStats, CommandResult, Config, Error, ErrorKind,
+    InconsistentObject, InconsistentPg, LocatorKey, LockMode, LockOptions, Locker, Namespace,
+    NotifyAcknowledgment, NotifyReply, NotifyTimeout, ObjectEntry, ObjectInfo, ObjectName,
+    ObjectPage, OmapEntry, OpResult, OperationOptions, Page, PoolStats, ReadOp, Result,
     SecurityMode, Snapshot, SnapshotContext, SparseExtent, SubOperationResult, Watch, WatchEvent,
     Watcher, WriteOp, Xattr,
 };
 use std::cmp::Ordering as CmpOrdering;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -59,10 +68,13 @@ struct ClientInner {
     closed: AtomicBool,
     lifecycle: Mutex<()>,
     monitor: RwLock<Option<Arc<MonitorClient>>>,
+    manager: RwLock<Option<Arc<ManagerClient>>>,
     authority: Arc<RwLock<Option<Arc<connector::MonitorConnector>>>>,
     objecter: Arc<OSDClient>,
     #[cfg(test)]
     factory: Option<SessionFactory>,
+    #[cfg(test)]
+    manager_factory: Option<ManagerSessionFactory>,
 }
 
 /// A cheaply clonable client handle. Construction performs no network I/O.
@@ -109,10 +121,13 @@ impl Client {
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
+            manager: RwLock::new(None),
             authority,
             objecter,
             #[cfg(test)]
             factory: None,
+            #[cfg(test)]
+            manager_factory: None,
         })))
     }
 
@@ -135,9 +150,11 @@ impl Client {
             closed: AtomicBool::new(false),
             lifecycle: Mutex::new(()),
             monitor: RwLock::new(None),
+            manager: RwLock::new(None),
             authority,
             objecter,
             factory: Some(factory),
+            manager_factory: None,
         })))
     }
 
@@ -172,6 +189,9 @@ impl Client {
             return Ok(());
         }
         if let Some(stale) = self.take_monitor() {
+            if let Some(manager) = self.take_manager() {
+                manager.close();
+            }
             self.clear_authority();
             stale.close();
             let _ = wait_shutdown_bounded(stale, &options, "Client::connect").await;
@@ -190,6 +210,9 @@ impl Client {
         }
         let result = wait_bounded(monitor.wait_ready(), &options, "Client::connect").await;
         if result.is_err() || self.is_closed() {
+            if let Some(manager) = self.take_manager() {
+                manager.close();
+            }
             self.remove_monitor(&monitor);
             monitor.close();
             let _ = wait_shutdown_bounded(monitor, &options, "Client::connect").await;
@@ -215,6 +238,21 @@ impl Client {
             .and_then(|monitor| monitor.snapshot().global_id())
     }
 
+    /// Returns authenticated session addresses in canonical messenger form.
+    #[must_use]
+    pub fn session_addresses(&self) -> Vec<String> {
+        self.monitor()
+            .filter(|monitor| monitor.terminal().is_none())
+            .and_then(|monitor| monitor.snapshot().client_addresses())
+            .map_or_else(Vec::new, |addresses| {
+                addresses
+                    .0
+                    .iter()
+                    .filter_map(format_session_address)
+                    .collect()
+            })
+    }
+
     /// Lists current pool names in deterministic order.
     ///
     /// # Errors
@@ -230,6 +268,377 @@ impl Client {
             .into_iter()
             .map(|pool| pool.name().to_owned())
             .collect())
+    }
+
+    /// Returns cluster capacity counters.
+    ///
+    /// # Errors
+    ///
+    /// Returns monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn cluster_stats(&self, options: OperationOptions) -> Result<ClusterStats> {
+        let operation = "Client::cluster_stats";
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        let monitor = self.connected_monitor(operation)?;
+        let reply = monitor
+            .statfs(options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))?;
+        Ok(ClusterStats {
+            kib: reply.kib,
+            kib_used: reply.kib_used,
+            kib_available: reply.kib_available,
+            objects: reply.objects,
+        })
+    }
+
+    /// Sends a monitor command and returns owned command output plus operation outcome.
+    ///
+    /// The second tuple element reports the command outcome. A monitor wire error can return
+    /// both command output and a non-`Ok(())` status.
+    pub async fn monitor_command(
+        &self,
+        command: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> (CommandResult, Result<()>) {
+        let operation_name = "Client::monitor_command";
+        let options =
+            match bounded_options(options, self.0.config.operation_timeout(), operation_name) {
+                Ok(options) => options,
+                Err(error) => {
+                    return (
+                        CommandResult {
+                            output: Vec::new(),
+                            status: String::new(),
+                        },
+                        Err(error),
+                    );
+                }
+            };
+        if let Err(error) = self.ready(operation_name, &options) {
+            return (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(error),
+            );
+        }
+        let monitor = match self.connected_monitor(operation_name) {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        let command = match command_argv(command.as_ref(), operation_name) {
+            Ok(command) => command,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        match monitor
+            .command(command, input.as_ref().to_vec(), options)
+            .await
+        {
+            Ok((reply, error)) => (
+                CommandResult {
+                    output: reply.data,
+                    status: reply.status,
+                },
+                error.map_or(Ok(()), |error| {
+                    Err(map_monitor_error(error, operation_name))
+                }),
+            ),
+            Err(error) => (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(map_monitor_error(error, operation_name)),
+            ),
+        }
+    }
+
+    /// Sends a manager command and returns owned command output plus operation outcome.
+    ///
+    /// The second tuple element reports the command outcome. A manager wire error can return
+    /// both command output and a non-`Ok(())` status.
+    pub async fn manager_command(
+        &self,
+        command: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> (CommandResult, Result<()>) {
+        let operation_name = "Client::manager_command";
+        let options =
+            match bounded_options(options, self.0.config.operation_timeout(), operation_name) {
+                Ok(options) => options,
+                Err(error) => {
+                    return (
+                        CommandResult {
+                            output: Vec::new(),
+                            status: String::new(),
+                        },
+                        Err(error),
+                    );
+                }
+            };
+        if let Err(error) = self.ready(operation_name, &options) {
+            return (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(error),
+            );
+        }
+        let monitor = match self.connected_monitor(operation_name) {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        let command = match command_argv(command.as_ref(), operation_name) {
+            Ok(command) => command,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        let manager = match self.manager_for_monitor(monitor, operation_name) {
+            Ok(manager) => manager,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        match manager
+            .command(command, input.as_ref().to_vec(), options)
+            .await
+        {
+            Ok((reply, error)) => (
+                CommandResult {
+                    output: reply.data,
+                    status: reply.status,
+                },
+                error.map_or(Ok(()), |error| {
+                    Err(map_manager_error(error, operation_name))
+                }),
+            ),
+            Err(error) => (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(map_manager_error(error, operation_name)),
+            ),
+        }
+    }
+
+    /// Sends an OSD command to a specific OSD id and returns output plus operation outcome.
+    ///
+    /// The second tuple element reports the command outcome. OSD wire errors preserve
+    /// command status and output in the returned `CommandResult`.
+    pub async fn osd_command(
+        &self,
+        osd: i64,
+        command: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> (CommandResult, Result<()>) {
+        let operation_name = "Client::osd_command";
+        let options =
+            match bounded_options(options, self.0.config.operation_timeout(), operation_name) {
+                Ok(options) => options,
+                Err(error) => {
+                    return (
+                        CommandResult {
+                            output: Vec::new(),
+                            status: String::new(),
+                        },
+                        Err(error),
+                    );
+                }
+            };
+        if let Err(error) = self.ready(operation_name, &options) {
+            return (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(error),
+            );
+        }
+        let osd = match i32::try_from(osd) {
+            Ok(value) if value >= 0 => value,
+            _ => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(Error::invalid(operation_name)),
+                );
+            }
+        };
+        let monitor = match self.connected_monitor(operation_name) {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        let command = match command_argv(command.as_ref(), operation_name) {
+            Ok(command) => command,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        match self
+            .0
+            .objecter
+            .osd_command(&monitor, osd, command, input.as_ref().to_vec(), &options)
+            .await
+        {
+            Ok((reply, error)) => (
+                command_result_from_osd(reply),
+                error.map_or(Ok(()), |error| Err(map_osd_error(error, operation_name))),
+            ),
+            Err(error) => (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(map_osd_error(error, operation_name)),
+            ),
+        }
+    }
+
+    /// Sends a PG command to the acting primary of a parsed placement-group string.
+    ///
+    /// The PG must be in canonical `pool.seed` form with a decimal pool id and hexadecimal seed.
+    /// The second tuple element reports the command outcome while preserving status and output.
+    pub async fn pg_command(
+        &self,
+        pg: &str,
+        command: impl AsRef<[u8]>,
+        input: impl AsRef<[u8]>,
+        options: OperationOptions,
+    ) -> (CommandResult, Result<()>) {
+        let operation_name = "Client::pg_command";
+        let options =
+            match bounded_options(options, self.0.config.operation_timeout(), operation_name) {
+                Ok(options) => options,
+                Err(error) => {
+                    return (
+                        CommandResult {
+                            output: Vec::new(),
+                            status: String::new(),
+                        },
+                        Err(error),
+                    );
+                }
+            };
+        if let Err(error) = self.ready(operation_name, &options) {
+            return (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(error),
+            );
+        }
+        let Ok(pg) = parse_pg(pg) else {
+            return (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(Error::invalid(operation_name)),
+            );
+        };
+        let command = match command_argv(command.as_ref(), operation_name) {
+            Ok(command) => command,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        let monitor = match self.connected_monitor(operation_name) {
+            Ok(monitor) => monitor,
+            Err(error) => {
+                return (
+                    CommandResult {
+                        output: Vec::new(),
+                        status: String::new(),
+                    },
+                    Err(error),
+                );
+            }
+        };
+        match self
+            .0
+            .objecter
+            .pg_command(&monitor, pg, command, input.as_ref().to_vec(), &options)
+            .await
+        {
+            Ok((reply, error)) => (
+                command_result_from_osd(reply),
+                error.map_or(Ok(()), |error| Err(map_osd_error(error, operation_name))),
+            ),
+            Err(error) => (
+                CommandResult {
+                    output: Vec::new(),
+                    status: String::new(),
+                },
+                Err(map_osd_error(error, operation_name)),
+            ),
+        }
     }
 
     /// Opens an immutable pool view by byte-preserving name.
@@ -280,6 +689,177 @@ impl Client {
             Error::new(ErrorKind::NotFound).with_operation("Client::open_pool_by_id")
         })?;
         self.resolved_pool(pool.id(), pool.name().as_bytes())
+    }
+
+    /// Creates a pool by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn create_pool(&self, name: &str, options: OperationOptions) -> Result<()> {
+        let operation = "Client::create_pool";
+        if name.is_empty() {
+            return Err(Error::invalid(operation));
+        }
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        let monitor = self.connected_monitor(operation)?;
+        monitor
+            .apply_pool_operation(0, PoolOperation::CreatePool, 0, name.to_owned(), options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))?;
+        Ok(())
+    }
+
+    /// Deletes a pool by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, not-found,
+    /// or Ceph errors.
+    pub async fn delete_pool(&self, name: &str, options: OperationOptions) -> Result<()> {
+        let operation = "Client::delete_pool";
+        if name.is_empty() {
+            return Err(Error::invalid(operation));
+        }
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        let monitor = self.connected_monitor(operation)?;
+        let map = monitor
+            .snapshot()
+            .osdmap()
+            .ok_or_else(|| Error::not_connected(operation))?;
+        let pool_id = map
+            .pool_by_name(name)
+            .map(crate::maps::Pool::id)
+            .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))?;
+        let pool_id = u32::try_from(pool_id).map_err(|_| Error::invalid(operation))?;
+        monitor
+            .apply_pool_operation(
+                pool_id,
+                PoolOperation::DeletePool,
+                0,
+                "delete".to_owned(),
+                options,
+            )
+            .await
+            .map_err(|error| map_monitor_error(error, operation))?;
+        Ok(())
+    }
+
+    /// Adds one address to the OSD blocklist and waits for a newer OSD map.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn blocklist(
+        &self,
+        address: &str,
+        duration: Duration,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let operation = "Client::blocklist";
+        validate_blocklist_arguments(address, duration, operation)?;
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        let monitor = self.connected_monitor(operation)?;
+        let epoch = monitor
+            .snapshot()
+            .osdmap()
+            .map(|map| map.epoch())
+            .ok_or_else(|| Error::not_connected(operation))?;
+        let payload = blocklist_command_payload(address, duration, operation)?;
+        let command = std::str::from_utf8(&payload)
+            .map_err(|_| Error::invalid(operation))?
+            .to_owned();
+        match monitor
+            .command(vec![command], Vec::new(), options.clone())
+            .await
+        {
+            Ok((_, None)) => {}
+            Ok((_, Some(error))) | Err(error) => {
+                return Err(map_monitor_error(error, operation));
+            }
+        }
+        monitor
+            .refresh_osdmap(epoch, &options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))
+    }
+
+    /// Lists inconsistent placement-groups in one pool using the manager JSON API.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, manager transport, cancellation/deadline, or malformed output errors.
+    pub async fn list_inconsistent_pgs(
+        &self,
+        pool_id: i64,
+        options: OperationOptions,
+    ) -> Result<Vec<InconsistentPg>> {
+        let operation = "Client::list_inconsistent_pgs";
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        if pool_id < 0 {
+            return Err(Error::invalid(operation));
+        }
+        let monitor = self.connected_monitor(operation)?;
+        let manager = self.manager_for_monitor(monitor, operation)?;
+        let mut command = serde_json::Map::new();
+        command.insert(
+            "format".to_owned(),
+            serde_json::Value::String("json".to_owned()),
+        );
+        command.insert("pool".to_owned(), serde_json::Value::Number(pool_id.into()));
+        command.insert(
+            "prefix".to_owned(),
+            serde_json::Value::String("pg ls".to_owned()),
+        );
+        command.insert(
+            "states".to_owned(),
+            serde_json::Value::Array(vec![serde_json::Value::String("inconsistent".to_owned())]),
+        );
+        let payload = serde_json::to_vec(&serde_json::Value::Object(command))
+            .map_err(|_| Error::invalid(operation))?;
+        let command = command_argv(&payload, operation)?;
+        let (reply, status) = manager
+            .command(command, Vec::new(), options)
+            .await
+            .map_err(|error| map_manager_error(error, operation))?;
+        let status = status.map_or(Ok(()), |error| Err(map_manager_error(error, operation)));
+        status?;
+        decode_inconsistent_pgs(&reply.data, operation)
+    }
+
+    /// Lists inconsistent objects for one canonical placement group.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, routing, transport, cancellation/deadline, bounds, or Ceph errors.
+    pub async fn list_inconsistent_objects(
+        &self,
+        pg: &str,
+        options: OperationOptions,
+    ) -> Result<Vec<InconsistentObject>> {
+        let operation = "Client::list_inconsistent_objects";
+        let options = bounded_options(options, self.0.config.operation_timeout(), operation)?;
+        self.ready(operation, &options)?;
+        let parsed = parse_pg(pg).map_err(|_| Error::invalid(operation))?;
+        let monitor = self.connected_monitor(operation)?;
+        let objects = self
+            .0
+            .objecter
+            .list_inconsistent_objects(&monitor, parsed, &options)
+            .await
+            .map_err(|error| map_osd_error(error, operation))?;
+        Ok(objects
+            .into_iter()
+            .map(|item| InconsistentObject {
+                object: item.object,
+                shards: item.shards,
+                errors: item.errors,
+            })
+            .collect())
     }
 
     /// Creates an immutable unresolved pool view without network I/O.
@@ -373,6 +953,9 @@ impl Client {
             }
             self.remove_monitor(&monitor);
         }
+        if let Some(manager) = self.take_manager() {
+            manager.close();
+        }
         flush_result.and(cleanup_result)
     }
 
@@ -380,6 +963,9 @@ impl Client {
     pub fn close(&self) {
         self.0.closed.store(true, Ordering::Release);
         self.0.objecter.close();
+        if let Some(manager) = self.manager() {
+            manager.close();
+        }
         if let Some(monitor) = self.monitor() {
             monitor.close();
         }
@@ -468,8 +1054,92 @@ impl Client {
             .is_some_and(|current| Arc::ptr_eq(current, monitor))
         {
             *slot = None;
+            if let Some(manager) = self.take_manager() {
+                manager.close();
+            }
             self.clear_authority();
         }
+    }
+
+    fn manager(&self) -> Option<Arc<ManagerClient>> {
+        self.0
+            .manager
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn install_manager(&self, manager: Arc<ManagerClient>) -> Option<Arc<ManagerClient>> {
+        let mut slot = self
+            .0
+            .manager
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.is_closed() {
+            return None;
+        }
+        if let Some(existing) = slot.as_ref()
+            && !existing.is_closed()
+        {
+            return Some(Arc::clone(existing));
+        }
+        let replaced = slot.replace(Arc::clone(&manager));
+        drop(slot);
+        if let Some(replaced) = replaced {
+            replaced.close();
+        }
+        Some(manager)
+    }
+
+    fn take_manager(&self) -> Option<Arc<ManagerClient>> {
+        self.0
+            .manager
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    fn manager_for_monitor(
+        &self,
+        monitor: Arc<MonitorClient>,
+        operation: &'static str,
+    ) -> Result<Arc<ManagerClient>> {
+        if let Some(manager) = self.manager()
+            && !manager.is_closed()
+        {
+            return Ok(manager);
+        }
+        let manager = Arc::new(self.build_manager_client(monitor)?);
+        let Some(selected) = self.install_manager(Arc::clone(&manager)) else {
+            manager.close();
+            return Err(Error::closed(operation));
+        };
+        if !Arc::ptr_eq(&selected, &manager) {
+            manager.close();
+        }
+        Ok(selected)
+    }
+
+    fn build_manager_client(&self, monitor: Arc<MonitorClient>) -> Result<ManagerClient> {
+        let source = Arc::new(MonitorManagerSource { monitor });
+        let config = ManagerConfig {
+            source,
+            authority_slot: Arc::clone(&self.0.authority),
+            frame_limits: FRAME_LIMITS,
+            dial_timeout: self.0.config.dial_timeout(),
+            handshake_timeout: self.0.config.handshake_timeout(),
+            allow_crc: self.0.config.security_mode() == SecurityMode::Crc,
+            address_nonce: self.0.address_nonce,
+            message_max_bytes: 32 << 20,
+            retry_delay: Duration::from_millis(100),
+            max_attempts: 64,
+        };
+        #[cfg(test)]
+        let factory = self.0.manager_factory.clone();
+        #[cfg(not(test))]
+        let factory = None;
+        ManagerClient::new(config, factory)
+            .map_err(|error| map_manager_error(error, "Client::manager_command"))
     }
 
     fn clear_authority(&self) {
@@ -543,7 +1213,7 @@ impl Client {
             cephx_limits: crate::cephx::crypto::Limits::default(),
             handshake_timeout: self.0.config.handshake_timeout(),
             max_banner_payload: 64,
-            requested_keys: SERVICE_AUTH | SERVICE_MONITOR | SERVICE_OSD,
+            requested_keys: SERVICE_AUTH | SERVICE_MONITOR | SERVICE_OSD | SERVICE_MANAGER,
             allow_crc: self.0.config.security_mode() == SecurityMode::Crc,
             global_id: 0,
             old_ticket: TicketBlob {
@@ -657,7 +1327,7 @@ impl Pool {
             return Err(Error::invalid("Pool::create_snapshot"));
         }
         self.apply_snapshot_operation(
-            PoolOperation::Create,
+            PoolOperation::CreateSnapshot,
             0,
             name,
             options,
@@ -677,7 +1347,7 @@ impl Pool {
             return Err(Error::invalid("Pool::remove_snapshot"));
         }
         self.apply_snapshot_operation(
-            PoolOperation::Delete,
+            PoolOperation::DeleteSnapshot,
             0,
             name,
             options,
@@ -783,6 +1453,41 @@ impl Pool {
             .uses_self_managed_snapshots())
     }
 
+    /// Returns pool I/O and storage counters.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, routing, monitor identity, transport, deadline, cancellation,
+    /// malformed-reply, or Ceph errors.
+    pub async fn stats(&self, options: OperationOptions) -> Result<PoolStats> {
+        let operation = "Pool::stats";
+        let _ = u32::try_from(self.id.ok_or_else(|| Error::invalid(operation))?)
+            .map_err(|_| Error::invalid(operation))?;
+        let pool_name = std::str::from_utf8(self.name.as_bytes()).map_err(|_| {
+            Error::new(ErrorKind::NotFound)
+                .with_operation(operation)
+                .with_safe_target(self.name.as_bytes())
+        })?;
+        let options =
+            bounded_options(options, self.client.0.config.operation_timeout(), operation)?;
+        self.client.ready(operation, &options)?;
+        let monitor = self.client.connected_monitor(operation)?;
+        let reply = monitor
+            .pool_stats(vec![pool_name.to_owned()], options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))?;
+        let stats = reply
+            .pools
+            .get(pool_name)
+            .ok_or_else(|| Error::invalid(operation))?;
+        Ok(PoolStats {
+            bytes_used: stats.bytes_used,
+            objects: stats.objects,
+            read_bytes: stats.read_bytes,
+            write_bytes: stats.write_bytes,
+        })
+    }
+
     /// Reports whether the pool is erasure coded.
     ///
     /// # Errors
@@ -817,6 +1522,129 @@ impl Pool {
         ))
     }
 
+    /// Enables one pool application namespace, optionally forcing a conflicting enable.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn enable_application(
+        &self,
+        name: &str,
+        force: bool,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let mut command = serde_json::Map::new();
+        command.insert(
+            "prefix".to_owned(),
+            serde_json::Value::String("osd pool application enable".to_owned()),
+        );
+        command.insert("app".to_owned(), serde_json::Value::String(name.to_owned()));
+        if force {
+            command.insert(
+                "yes_i_really_mean_it".to_owned(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        self.mutate_application(command, options, "Pool::enable_application")
+            .await
+    }
+
+    /// Sets one pool application metadata key/value pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn set_application_metadata(
+        &self,
+        application: &str,
+        key: &str,
+        value: &str,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let mut command = serde_json::Map::new();
+        command.insert(
+            "prefix".to_owned(),
+            serde_json::Value::String("osd pool application set".to_owned()),
+        );
+        command.insert(
+            "app".to_owned(),
+            serde_json::Value::String(application.to_owned()),
+        );
+        command.insert("key".to_owned(), serde_json::Value::String(key.to_owned()));
+        command.insert(
+            "value".to_owned(),
+            serde_json::Value::String(value.to_owned()),
+        );
+        self.mutate_application(command, options, "Pool::set_application_metadata")
+            .await
+    }
+
+    /// Removes one pool application metadata key.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, monitor identity, transport, deadline, cancellation, or Ceph errors.
+    pub async fn remove_application_metadata(
+        &self,
+        application: &str,
+        key: &str,
+        options: OperationOptions,
+    ) -> Result<()> {
+        let mut command = serde_json::Map::new();
+        command.insert(
+            "prefix".to_owned(),
+            serde_json::Value::String("osd pool application rm".to_owned()),
+        );
+        command.insert(
+            "app".to_owned(),
+            serde_json::Value::String(application.to_owned()),
+        );
+        command.insert("key".to_owned(), serde_json::Value::String(key.to_owned()));
+        self.mutate_application(command, options, "Pool::remove_application_metadata")
+            .await
+    }
+
+    /// Lists pool applications in deterministic lexicographic order.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, or missing-pool errors.
+    pub fn list_applications(&self, options: OperationOptions) -> Result<Vec<String>> {
+        let metadata = self.application_metadata(options, "Pool::list_applications")?;
+        Ok(sorted_application_names(&metadata))
+    }
+
+    /// Returns one pool application metadata value.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, missing-pool, or not-found errors.
+    pub fn get_application_metadata(
+        &self,
+        application: &str,
+        key: &str,
+        options: OperationOptions,
+    ) -> Result<String> {
+        let operation = "Pool::get_application_metadata";
+        let metadata = self.application_metadata(options, operation)?;
+        application_value(&metadata, application, key, operation)
+    }
+
+    /// Lists one application metadata map.
+    ///
+    /// # Errors
+    ///
+    /// Returns readiness, deadline, cancellation, missing-pool, or not-found errors.
+    pub fn list_application_metadata(
+        &self,
+        application: &str,
+        options: OperationOptions,
+    ) -> Result<HashMap<String, String>> {
+        let operation = "Pool::list_application_metadata";
+        let metadata = self.application_metadata(options, operation)?;
+        application_values(&metadata, application, operation)
+    }
+
     async fn apply_snapshot_operation(
         &self,
         code: PoolOperation,
@@ -833,6 +1661,63 @@ impl Pool {
         let monitor = self.client.connected_monitor(operation)?;
         monitor
             .apply_pool_operation(pool, code, snapshot, name.to_owned(), options)
+            .await
+            .map_err(|error| map_monitor_error(error, operation))
+    }
+
+    fn application_metadata(
+        &self,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<HashMap<String, HashMap<String, String>>> {
+        Ok(self
+            .metadata(options, operation)?
+            .application_metadata()
+            .clone())
+    }
+
+    async fn mutate_application(
+        &self,
+        mut command: serde_json::Map<String, serde_json::Value>,
+        options: OperationOptions,
+        operation: &'static str,
+    ) -> Result<()> {
+        let _ = u32::try_from(self.id.ok_or_else(|| Error::invalid(operation))?)
+            .map_err(|_| Error::invalid(operation))?;
+        let pool_name = std::str::from_utf8(self.name.as_bytes()).map_err(|_| {
+            Error::new(ErrorKind::NotFound)
+                .with_operation(operation)
+                .with_safe_target(self.name.as_bytes())
+        })?;
+        let options =
+            bounded_options(options, self.client.0.config.operation_timeout(), operation)?;
+        self.client.ready(operation, &options)?;
+        let monitor = self.client.connected_monitor(operation)?;
+        let epoch = monitor
+            .snapshot()
+            .osdmap()
+            .map(|map| map.epoch())
+            .ok_or_else(|| Error::not_connected(operation))?;
+        command.insert(
+            "pool".to_owned(),
+            serde_json::Value::String(pool_name.to_owned()),
+        );
+        let payload = serde_json::to_vec(&serde_json::Value::Object(command))
+            .map_err(|_| Error::invalid(operation))?;
+        let command = std::str::from_utf8(&payload)
+            .map_err(|_| Error::invalid(operation))?
+            .to_owned();
+        match monitor
+            .command(vec![command], Vec::new(), options.clone())
+            .await
+        {
+            Ok((_, None)) => {}
+            Ok((_, Some(error))) | Err(error) => {
+                return Err(map_monitor_error(error, operation));
+            }
+        }
+        monitor
+            .refresh_osdmap(epoch, &options)
             .await
             .map_err(|error| map_monitor_error(error, operation))
     }
@@ -1375,6 +2260,41 @@ fn monitor_is_ready(monitor: &MonitorClient) -> bool {
     monitor.terminal().is_none() && monitor.snapshot().osdmap().is_some()
 }
 
+struct MonitorManagerSource {
+    monitor: Arc<MonitorClient>,
+}
+
+impl ManagerStateSource for MonitorManagerSource {
+    fn snapshot(&self) -> ManagerSnapshot {
+        let state = self.monitor.snapshot();
+        let mut unsupported_features = false;
+        let target = state.mgrmap().and_then(|mgrmap| {
+            if !mgrmap.available() || mgrmap.active_gid() == 0 || mgrmap.active_name().is_empty() {
+                return None;
+            }
+            if !GlobalFeatures(mgrmap.active_features())
+                .contains(GlobalFeatures::SERVER_OCTOPUS_MASK)
+            {
+                unsupported_features = true;
+                return None;
+            }
+            let address = mgrmap.active_v2_address()?.clone();
+            Some(crate::mgr::client::ActiveTarget {
+                epoch: mgrmap.epoch(),
+                gid: mgrmap.active_gid(),
+                name: mgrmap.active_name().to_owned(),
+                address,
+                features: mgrmap.active_features(),
+            })
+        });
+        ManagerSnapshot {
+            fsid: state.connected_fsid(),
+            target,
+            unsupported_features,
+        }
+    }
+}
+
 fn map_monitor_error(error: MonitorError, operation: &'static str) -> Error {
     if let MonitorError::WireErrno(code) = error {
         return Error::from_wire(wire_error_kind(code), code).with_operation(operation);
@@ -1395,6 +2315,28 @@ fn map_monitor_error(error: MonitorError, operation: &'static str) -> Error {
         | MonitorError::Message(_)
         | MonitorError::Map(_) => ErrorKind::NotConnected,
         MonitorError::WireErrno(_) => unreachable!(),
+    };
+    Error::new(kind).with_operation(operation)
+}
+
+fn map_manager_error(error: ManagerError, operation: &'static str) -> Error {
+    if let ManagerError::WireErrno(code) = error {
+        return Error::from_wire(wire_error_kind(code), code).with_operation(operation);
+    }
+    let kind = match error {
+        ManagerError::Closed | ManagerError::Session(SessionError::Closed) => ErrorKind::Closed,
+        ManagerError::InvalidConfig => ErrorKind::InvalidArgument,
+        ManagerError::NoActiveManager | ManagerError::IdentityUnavailable => {
+            ErrorKind::NotConnected
+        }
+        ManagerError::UnsupportedManagerFeatures
+        | ManagerError::Session(
+            SessionError::UnsupportedFeature | SessionError::UnsupportedPayload,
+        ) => ErrorKind::Unsupported,
+        ManagerError::Session(SessionError::Cancelled) => ErrorKind::Canceled,
+        ManagerError::Session(SessionError::OutcomeUnknown) => ErrorKind::OutcomeUnknown,
+        ManagerError::Session(_) | ManagerError::Message(_) => ErrorKind::NotConnected,
+        ManagerError::WireErrno(_) => unreachable!(),
     };
     Error::new(kind).with_operation(operation)
 }
@@ -3090,6 +4032,158 @@ fn parse_lock_client(value: &str) -> Option<u64> {
     value.strip_prefix("client.")?.parse::<u64>().ok()
 }
 
+fn command_result_from_osd(reply: OSDCommandResult) -> CommandResult {
+    CommandResult {
+        output: reply.output,
+        status: reply.status,
+    }
+}
+
+fn command_argv(command: &[u8], operation: &'static str) -> Result<Vec<String>> {
+    let Some(start) = command.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+        return Err(Error::invalid(operation));
+    };
+    let Some(end) = command.iter().rposition(|byte| !byte.is_ascii_whitespace()) else {
+        return Err(Error::invalid(operation));
+    };
+    let trimmed = &command[start..=end];
+    let value: serde_json::Value =
+        serde_json::from_slice(trimmed).map_err(|_| Error::invalid(operation))?;
+    match value {
+        serde_json::Value::Object(_) => {
+            let command = std::str::from_utf8(trimmed).map_err(|_| Error::invalid(operation))?;
+            Ok(vec![command.to_owned()])
+        }
+        _ => Err(Error::invalid(operation)),
+    }
+}
+
+pub(crate) fn decode_inconsistent_pgs(
+    data: &[u8],
+    operation: &'static str,
+) -> Result<Vec<InconsistentPg>> {
+    let Some(start) = data.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+        return Ok(Vec::new());
+    };
+    let Some(end) = data.iter().rposition(|byte| !byte.is_ascii_whitespace()) else {
+        return Ok(Vec::new());
+    };
+    let trimmed = &data[start..=end];
+    if !matches!(trimmed.first(), Some(b'[' | b'{')) {
+        return Err(Error::invalid(operation));
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(trimmed).map_err(|_| Error::invalid(operation))?;
+    let entries = match value {
+        serde_json::Value::Array(entries) => entries,
+        serde_json::Value::Object(mut object) => {
+            let Some(value) = object.remove("pg_stats") else {
+                return Ok(Vec::new());
+            };
+            if value.is_null() {
+                return Ok(Vec::new());
+            }
+            value
+                .as_array()
+                .cloned()
+                .ok_or_else(|| Error::invalid(operation))?
+        }
+        _ => return Err(Error::invalid(operation)),
+    };
+    let mut result = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let Some(object) = entry.as_object() else {
+            return Err(Error::invalid(operation));
+        };
+        let Some(pgid) = object.get("pgid").and_then(serde_json::Value::as_str) else {
+            return Err(Error::invalid(operation));
+        };
+        if pgid.is_empty() {
+            return Err(Error::invalid(operation));
+        }
+        result.push(InconsistentPg {
+            pg: pgid.to_owned(),
+            errors: Vec::new(),
+        });
+    }
+    Ok(result)
+}
+
+fn format_session_address(address: &EntityAddr) -> Option<String> {
+    let endpoint = address.endpoint()?;
+    let prefix = if address.is_v2() { "v2" } else { "v1" };
+    Some(format!("{prefix}:{endpoint}/{}", address.nonce()))
+}
+
+fn validate_blocklist_arguments(
+    address: &str,
+    duration: Duration,
+    operation: &'static str,
+) -> Result<()> {
+    if crate::protocol::address::parse_entity_addr(address).is_err()
+        || duration.subsec_nanos() != 0
+        || duration.as_secs() > u64::from(u32::MAX)
+    {
+        return Err(Error::invalid(operation));
+    }
+    Ok(())
+}
+
+fn blocklist_command_payload(
+    address: &str,
+    duration: Duration,
+    operation: &'static str,
+) -> Result<Vec<u8>> {
+    let mut command = serde_json::Map::new();
+    command.insert(
+        "prefix".to_owned(),
+        serde_json::Value::String("osd blocklist".to_owned()),
+    );
+    command.insert(
+        "blocklistop".to_owned(),
+        serde_json::Value::String("add".to_owned()),
+    );
+    command.insert(
+        "addr".to_owned(),
+        serde_json::Value::String(address.to_owned()),
+    );
+    if duration > Duration::ZERO {
+        let seconds = duration.as_secs();
+        let expire = serde_json::from_str::<serde_json::Value>(&format!("{seconds}.0"))
+            .map_err(|_| Error::invalid(operation))?;
+        command.insert("expire".to_owned(), expire);
+    }
+    serde_json::to_vec(&serde_json::Value::Object(command)).map_err(|_| Error::invalid(operation))
+}
+
+fn sorted_application_names(metadata: &HashMap<String, HashMap<String, String>>) -> Vec<String> {
+    let mut applications = metadata.keys().cloned().collect::<Vec<_>>();
+    applications.sort();
+    applications
+}
+
+fn application_values(
+    metadata: &HashMap<String, HashMap<String, String>>,
+    application: &str,
+    operation: &'static str,
+) -> Result<HashMap<String, String>> {
+    metadata
+        .get(application)
+        .cloned()
+        .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))
+}
+
+fn application_value(
+    metadata: &HashMap<String, HashMap<String, String>>,
+    application: &str,
+    key: &str,
+    operation: &'static str,
+) -> Result<String> {
+    application_values(metadata, application, operation)?
+        .remove(key)
+        .ok_or_else(|| Error::new(ErrorKind::NotFound).with_operation(operation))
+}
+
 fn map_osd_error(error: ClientError, operation: &'static str) -> Error {
     let (kind, wire_errno) = match error {
         ClientError::Closed => (ErrorKind::Closed, None),
@@ -3137,9 +4231,9 @@ const fn wire_error_kind(errno: i32) -> ErrorKind {
 mod tests {
     use super::*;
     use crate::mon::client::{MonitorSession, OpenedMonitorSession};
-    use crate::mon::messages::{MESSAGE_MON_MAP, MESSAGE_OSD_MAP};
+    use crate::mon::messages::{MESSAGE_MON_COMMAND_REPLY, MESSAGE_MON_MAP, MESSAGE_OSD_MAP};
     use crate::msgr::message::{Message, MessageHeader, MessageLengths};
-    use crate::wire::Encoder;
+    use crate::wire::{Decoder, Encoder};
     use crate::*;
     use std::future::Future;
     use std::pin::pin;
@@ -3246,6 +4340,138 @@ mod tests {
             1,
             encoder.finish().expect("OSD map message"),
         )
+    }
+
+    fn monitor_command_reply(
+        transaction_id: u64,
+        result: i32,
+        status: &str,
+        command: &[&str],
+        output: &[u8],
+    ) -> Message {
+        let mut encoder = Encoder::new(1024);
+        encoder.u64(1);
+        encoder.i16(-1);
+        encoder.u64(0);
+        encoder.i32(result);
+        encoder.string(status);
+        encoder.u32(u32::try_from(command.len()).expect("command count"));
+        for item in command {
+            encoder.string(item);
+        }
+        let mut message = front_message(
+            MESSAGE_MON_COMMAND_REPLY,
+            1,
+            0,
+            encoder.finish().expect("command reply"),
+        );
+        message.header.transaction_id = transaction_id;
+        message.lengths.data = u32::try_from(output.len()).expect("output length");
+        message.data = output.to_vec();
+        message
+    }
+
+    fn statfs_reply(transaction_id: u64, fsid: Fsid) -> Message {
+        let mut encoder = Encoder::new(128);
+        encoder.raw(&fsid.0);
+        encoder.u64(43);
+        encoder.u64(100);
+        encoder.u64(40);
+        encoder.u64(60);
+        encoder.u64(7);
+        let mut message = front_message(
+            crate::mon::messages::MESSAGE_STATFS_REPLY,
+            1,
+            1,
+            encoder.finish().expect("statfs reply"),
+        );
+        message.header.transaction_id = transaction_id;
+        message
+    }
+
+    fn pool_stats_reply(transaction_id: u64, fsid: Fsid, pool: &str) -> Message {
+        let mut front = Encoder::new(16 << 10);
+        front.u64(9);
+        front.i16(-1);
+        front.u64(0);
+        front.raw(&fsid.0);
+        front.u32(1);
+        front.string(pool);
+        front.versioned(7, 5, |pool_stats| {
+            pool_stats.versioned(2, 2, |collection| {
+                collection.versioned(20, 14, |sum| {
+                    for index in 0..40 {
+                        let value = match index {
+                            0 => 100_u64,
+                            1 => 3,
+                            8 => 5,
+                            10 => 7,
+                            22 => 11,
+                            37 => 13,
+                            _ => 0,
+                        };
+                        if (28..=31).contains(&index) {
+                            sum.i32(i32::try_from(value).expect("sum value"));
+                        } else {
+                            sum.u64(value);
+                        }
+                    }
+                });
+                collection.u32(0);
+            });
+            pool_stats.i64(0);
+            pool_stats.i64(0);
+            pool_stats.i32(0);
+            pool_stats.i32(0);
+            pool_stats.versioned(1, 1, |store| {
+                for index in 0..10 {
+                    let value = match index {
+                        3 => 200_u64,
+                        8 => 17,
+                        _ => 0,
+                    };
+                    store.u64(value);
+                }
+            });
+            pool_stats.i32(1);
+        });
+        front.bool(true);
+        let mut message = front_message(
+            crate::mon::messages::MESSAGE_GET_POOL_STATS_REPLY,
+            2,
+            1,
+            front.finish().expect("pool stats reply"),
+        );
+        message.header.transaction_id = transaction_id;
+        message
+    }
+
+    fn pool_operation_reply(
+        transaction_id: u64,
+        fsid: Fsid,
+        result: i32,
+        epoch: u32,
+        has_response_data: bool,
+    ) -> Message {
+        let mut encoder = Encoder::new(128);
+        encoder.u64(0);
+        encoder.i16(-1);
+        encoder.u64(0);
+        encoder.raw(&fsid.0);
+        encoder.i32(result);
+        encoder.u32(epoch);
+        encoder.u8(u8::from(has_response_data));
+        if has_response_data {
+            encoder.bytes(&1_u64.to_le_bytes());
+        }
+        let mut message = front_message(
+            crate::mon::messages::MESSAGE_POOL_OPERATION_REPLY,
+            1,
+            1,
+            encoder.finish().expect("pool operation reply"),
+        );
+        message.header.transaction_id = transaction_id;
+        message
     }
 
     fn client() -> Client {
@@ -3529,6 +4755,10 @@ mod tests {
         let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
             session: session.clone(),
             global_id: 42,
+            client_addresses: EntityAddrVec(vec![
+                crate::protocol::address::parse_entity_addr("v2:192.0.2.1:3300/7")
+                    .expect("session address"),
+            ]),
         })));
         let calls = Arc::new(AtomicUsize::new(0));
         let factory: SessionFactory = Arc::new({
@@ -3562,6 +4792,9 @@ mod tests {
 
         assert_eq!(client.fsid(), Some(monmap.fsid().to_string()));
         assert_eq!(client.instance_id(), Some(42));
+        let addresses = client.session_addresses();
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(addresses[0], "v2:192.0.2.1:3300/7");
         client
             .connect(OperationOptions::new())
             .await
@@ -3683,6 +4916,7 @@ mod tests {
         let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
             session,
             global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
         })));
         let factory: SessionFactory = Arc::new(move |_| {
             let opened = Arc::clone(&opened);
@@ -3727,6 +4961,578 @@ mod tests {
                 .expect_err("terminal monitor")
                 .kind(),
             ErrorKind::NotConnected
+        );
+        client
+            .shutdown(OperationOptions::new())
+            .await
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn monitor_command_rejects_malformed_input() {
+        let (incoming_tx, incoming_rx) = mpsc::channel(4);
+        let (sent_tx, mut sent_rx) = mpsc::channel(4);
+        let session = Arc::new(FakeSession {
+            incoming: Mutex::new(incoming_rx),
+            sent: sent_tx,
+            closed: AtomicBool::new(false),
+        });
+        let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
+            session,
+            global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
+        })));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move {
+                opened
+                    .lock()
+                    .await
+                    .take()
+                    .ok_or(MonitorError::AttemptsExhausted)
+            })
+        });
+        let client = Client::with_factory(configured(), factory).expect("client");
+        let connecting = tokio::spawn({
+            let client = client.clone();
+            async move { client.connect(OperationOptions::new()).await }
+        });
+        sent_rx.recv().await.expect("subscription");
+        let mon_bytes = include_bytes!("../testdata/p04/monmap-v9.bin");
+        let osd_bytes = include_bytes!("../testdata/p04/osdmap-v8.bin");
+        let osdmap = crate::maps::decode_osdmap(osd_bytes, MAP_LIMITS).expect("OSD map fixture");
+        incoming_tx
+            .send(monmap_message(mon_bytes))
+            .await
+            .expect("monmap");
+        incoming_tx
+            .send(osdmap_message(osdmap.fsid(), osdmap.epoch(), osd_bytes))
+            .await
+            .expect("OSD map");
+        connecting.await.expect("connect task").expect("connect");
+
+        let (reply, result) = client
+            .monitor_command(b"[]", b"opaque", OperationOptions::new())
+            .await;
+        assert_eq!(reply.output, Vec::<u8>::new());
+        assert!(reply.status.is_empty());
+        assert_eq!(
+            result.expect_err("invalid input").kind(),
+            ErrorKind::InvalidArgument
+        );
+        client
+            .shutdown(OperationOptions::new())
+            .await
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn blocklist_rejects_malformed_arguments_before_connection() {
+        let client = client();
+        let cases = [
+            ("not-an-address", Duration::from_secs(1)),
+            ("v2:192.0.2.1:6800/1", Duration::from_millis(1)),
+            (
+                "v2:192.0.2.1:6800/1",
+                Duration::from_secs(u64::from(u32::MAX) + 1),
+            ),
+        ];
+        for (address, duration) in cases {
+            assert_eq!(
+                client
+                    .blocklist(address, duration, OperationOptions::new())
+                    .await
+                    .expect_err("invalid blocklist arguments")
+                    .kind(),
+                ErrorKind::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn blocklist_command_payload_uses_numeric_float_expiration() {
+        let payload =
+            blocklist_command_payload("v2:192.0.2.1:6800/1", Duration::from_secs(60), "test")
+                .expect("payload");
+        assert_eq!(
+            String::from_utf8(payload).expect("utf8"),
+            r#"{"addr":"v2:192.0.2.1:6800/1","blocklistop":"add","expire":60.0,"prefix":"osd blocklist"}"#
+        );
+
+        let zero = blocklist_command_payload("v2:192.0.2.1:6800/1", Duration::ZERO, "test")
+            .expect("payload");
+        assert_eq!(
+            String::from_utf8(zero).expect("utf8"),
+            r#"{"addr":"v2:192.0.2.1:6800/1","blocklistop":"add","prefix":"osd blocklist"}"#
+        );
+    }
+
+    #[test]
+    fn decode_inconsistent_pgs_accepts_supported_shapes() {
+        let operation = "test";
+        assert_eq!(
+            decode_inconsistent_pgs(b"", operation).expect("empty"),
+            vec![]
+        );
+        assert_eq!(
+            decode_inconsistent_pgs(br#"[{"pgid":"7.1a"}]"#, operation).expect("array"),
+            vec![InconsistentPg {
+                pg: "7.1a".to_owned(),
+                errors: Vec::new()
+            }]
+        );
+        assert_eq!(
+            decode_inconsistent_pgs(br#"{"pg_stats":[{"pgid":"3.f"}]}"#, operation)
+                .expect("envelope"),
+            vec![InconsistentPg {
+                pg: "3.f".to_owned(),
+                errors: Vec::new()
+            }]
+        );
+        assert_eq!(
+            decode_inconsistent_pgs(br#"{"pg_stats":null}"#, operation).expect("null"),
+            vec![]
+        );
+        assert_eq!(
+            decode_inconsistent_pgs(br"{}", operation).expect("missing pg_stats"),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn decode_inconsistent_pgs_rejects_malformed_and_empty_pgid() {
+        let operation = "test";
+        for value in [
+            br"null".as_slice(),
+            br#"{"pg_stats":{}}"#.as_slice(),
+            br#"[{"pgid":""}]"#.as_slice(),
+            br#"[{"pgid":1}]"#.as_slice(),
+            br#"[{"wrong":"7.1a"}]"#.as_slice(),
+        ] {
+            assert_eq!(
+                decode_inconsistent_pgs(value, operation)
+                    .expect_err("malformed response")
+                    .kind(),
+                ErrorKind::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn command_argv_accepts_any_single_json_object_and_rejects_non_objects() {
+        let operation = "test";
+        assert_eq!(
+            command_argv(br#"  {"prefix":"status"}  "#, operation).expect("object"),
+            vec!["{\"prefix\":\"status\"}".to_owned()]
+        );
+        assert_eq!(
+            command_argv(b"{}", operation).expect("empty object"),
+            vec!["{}".to_owned()]
+        );
+        for value in [b"[]".as_slice(), b"\"text\"".as_slice(), b"0".as_slice()] {
+            assert_eq!(
+                command_argv(value, operation)
+                    .expect_err("non-object should fail")
+                    .kind(),
+                ErrorKind::InvalidArgument
+            );
+        }
+    }
+
+    #[test]
+    fn application_helpers_sort_own_and_report_missing_items() {
+        let metadata = HashMap::from([
+            (
+                "zeta".to_owned(),
+                HashMap::from([("k1".to_owned(), "v1".to_owned())]),
+            ),
+            (
+                "alpha".to_owned(),
+                HashMap::from([("k2".to_owned(), "v2".to_owned())]),
+            ),
+        ]);
+        assert_eq!(
+            sorted_application_names(&metadata),
+            vec!["alpha".to_owned(), "zeta".to_owned()]
+        );
+
+        let mut values = application_values(&metadata, "alpha", "op").expect("values");
+        values.insert("k2".to_owned(), "changed".to_owned());
+        assert_eq!(
+            application_value(&metadata, "alpha", "k2", "op").expect("value"),
+            "v2"
+        );
+
+        assert_eq!(
+            application_values(&metadata, "missing", "op")
+                .expect_err("missing app")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        assert_eq!(
+            application_value(&metadata, "alpha", "missing", "op")
+                .expect_err("missing key")
+                .kind(),
+            ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn session_address_formatting_is_canonical() {
+        let v2 =
+            crate::protocol::address::parse_entity_addr("v2:192.0.2.1:3300/7").expect("v2 address");
+        let v1 = crate::protocol::address::parse_entity_addr("v1:[2001:db8::1]:6789/3")
+            .expect("v1 address");
+        assert_eq!(
+            format_session_address(&v2),
+            Some("v2:192.0.2.1:3300/7".to_owned())
+        );
+        assert_eq!(
+            format_session_address(&v1),
+            Some("v1:[2001:db8::1]:6789/3".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn application_mutation_waits_for_newer_osd_map() {
+        let (incoming_tx, incoming_rx) = mpsc::channel(8);
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let session = Arc::new(FakeSession {
+            incoming: Mutex::new(incoming_rx),
+            sent: sent_tx,
+            closed: AtomicBool::new(false),
+        });
+        let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
+            session,
+            global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
+        })));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single session")) })
+        });
+        let client = Client::with_factory(configured(), factory).expect("client");
+        let connecting = tokio::spawn({
+            let client = client.clone();
+            async move { client.connect(OperationOptions::new()).await }
+        });
+        sent_rx.recv().await.expect("subscription");
+
+        let mon_bytes = include_bytes!("../testdata/p04/monmap-v9.bin");
+        let full_bytes = include_bytes!("../testdata/p04/osdmap-v8.bin");
+        let full_map = crate::maps::decode_osdmap(full_bytes, MAP_LIMITS).expect("full map");
+        incoming_tx
+            .send(monmap_message(mon_bytes))
+            .await
+            .expect("monmap");
+        incoming_tx
+            .send(osdmap_message(
+                full_map.fsid(),
+                full_map.epoch(),
+                full_bytes,
+            ))
+            .await
+            .expect("osdmap");
+        connecting.await.expect("connect task").expect("connect");
+
+        let pool = client.resolved_pool(7, b"data").expect("pool");
+        let pending = tokio::spawn(async move {
+            pool.set_application_metadata("test", "k", "v", OperationOptions::new())
+                .await
+        });
+        let request = sent_rx.recv().await.expect("monitor command request");
+        assert_eq!(
+            request.header.message_type,
+            crate::mon::messages::MESSAGE_MON_COMMAND
+        );
+        incoming_tx
+            .send(monitor_command_reply(
+                request.header.transaction_id,
+                0,
+                "ok",
+                &["{}"],
+                b"",
+            ))
+            .await
+            .expect("command reply");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!pending.is_finished());
+
+        drop(incoming_tx);
+        let error = pending
+            .await
+            .expect("mutation task")
+            .expect_err("refresh should fail after terminal session");
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Closed | ErrorKind::NotConnected
+        ));
+        client
+            .shutdown(OperationOptions::new())
+            .await
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn monitor_command_preserves_partial_error_result() {
+        let (incoming_tx, incoming_rx) = mpsc::channel(8);
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let session = Arc::new(FakeSession {
+            incoming: Mutex::new(incoming_rx),
+            sent: sent_tx,
+            closed: AtomicBool::new(false),
+        });
+        let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
+            session,
+            global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
+        })));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single session")) })
+        });
+        let client = Client::with_factory(configured(), factory).expect("client");
+        let connecting = tokio::spawn({
+            let client = client.clone();
+            async move { client.connect(OperationOptions::new()).await }
+        });
+        sent_rx.recv().await.expect("subscription");
+        let mon_bytes = include_bytes!("../testdata/p04/monmap-v9.bin");
+        let osd_bytes = include_bytes!("../testdata/p04/osdmap-v8.bin");
+        let osdmap = crate::maps::decode_osdmap(osd_bytes, MAP_LIMITS).expect("OSD map fixture");
+        incoming_tx
+            .send(monmap_message(mon_bytes))
+            .await
+            .expect("monmap");
+        incoming_tx
+            .send(osdmap_message(osdmap.fsid(), osdmap.epoch(), osd_bytes))
+            .await
+            .expect("OSD map");
+        connecting.await.expect("connect task").expect("connect");
+
+        let pending = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .monitor_command(
+                        b"{\"prefix\":\"status\"}",
+                        b"\0binary\xff",
+                        OperationOptions::new(),
+                    )
+                    .await
+            }
+        });
+        let request = sent_rx.recv().await.expect("monitor command request");
+        assert_eq!(
+            request.header.message_type,
+            crate::mon::messages::MESSAGE_MON_COMMAND
+        );
+        incoming_tx
+            .send(monitor_command_reply(
+                request.header.transaction_id,
+                -13,
+                "denied",
+                &["{\"prefix\":\"status\"}"],
+                b"partial-output",
+            ))
+            .await
+            .expect("command reply");
+
+        let (reply, result) = pending.await.expect("join");
+        assert_eq!(reply.output, b"partial-output");
+        assert_eq!(reply.status, "denied");
+        let error = result.expect_err("server error");
+        assert_eq!(error.kind(), ErrorKind::PermissionDenied);
+        client
+            .shutdown(OperationOptions::new())
+            .await
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn public_cluster_pool_stats_and_pool_create_delete_behaviors() {
+        let (incoming_tx, incoming_rx) = mpsc::channel(16);
+        let (sent_tx, mut sent_rx) = mpsc::channel(16);
+        let session = Arc::new(FakeSession {
+            incoming: Mutex::new(incoming_rx),
+            sent: sent_tx,
+            closed: AtomicBool::new(false),
+        });
+        let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
+            session,
+            global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
+        })));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single session")) })
+        });
+        let client = Client::with_factory(configured(), factory).expect("client");
+        let connecting = tokio::spawn({
+            let client = client.clone();
+            async move { client.connect(OperationOptions::new()).await }
+        });
+        sent_rx.recv().await.expect("subscription");
+        let mon_bytes = include_bytes!("../testdata/p04/monmap-v9.bin");
+        let osd_bytes = include_bytes!("../testdata/p04/osdmap-v8.bin");
+        let osdmap = crate::maps::decode_osdmap(osd_bytes, MAP_LIMITS).expect("OSD map fixture");
+        incoming_tx
+            .send(monmap_message(mon_bytes))
+            .await
+            .expect("monmap");
+        incoming_tx
+            .send(osdmap_message(osdmap.fsid(), osdmap.epoch(), osd_bytes))
+            .await
+            .expect("OSD map");
+        connecting.await.expect("connect task").expect("connect");
+
+        let pending_stats = tokio::spawn({
+            let client = client.clone();
+            async move { client.cluster_stats(OperationOptions::new()).await }
+        });
+        let stats_request = sent_rx.recv().await.expect("statfs request");
+        assert_eq!(
+            stats_request.header.message_type,
+            crate::mon::messages::MESSAGE_STATFS
+        );
+        incoming_tx
+            .send(statfs_reply(
+                stats_request.header.transaction_id,
+                osdmap.fsid(),
+            ))
+            .await
+            .expect("statfs reply");
+        let cluster = pending_stats.await.expect("join").expect("cluster stats");
+        assert_eq!(cluster.kib, 100);
+        assert_eq!(cluster.kib_used, 40);
+        assert_eq!(cluster.kib_available, 60);
+        assert_eq!(cluster.objects, 7);
+
+        let pool = client.resolved_pool(7, b"data").expect("pool");
+        let pending_pool_stats =
+            tokio::spawn(async move { pool.stats(OperationOptions::new()).await });
+        let pool_stats_request = sent_rx.recv().await.expect("pool stats request");
+        assert_eq!(
+            pool_stats_request.header.message_type,
+            crate::mon::messages::MESSAGE_GET_POOL_STATS
+        );
+        incoming_tx
+            .send(pool_stats_reply(
+                pool_stats_request.header.transaction_id,
+                osdmap.fsid(),
+                "data",
+            ))
+            .await
+            .expect("pool stats reply");
+        let stats = pending_pool_stats.await.expect("join").expect("pool stats");
+        assert_eq!(stats.bytes_used, 217);
+        assert_eq!(stats.objects, 3);
+        assert_eq!(stats.read_bytes, 5 << 10);
+        assert_eq!(stats.write_bytes, 7 << 10);
+
+        let create = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .create_pool("p12-created", OperationOptions::new())
+                    .await
+            }
+        });
+        let create_request = sent_rx.recv().await.expect("create request");
+        assert_eq!(
+            create_request.header.message_type,
+            crate::mon::messages::MESSAGE_POOL_OPERATION
+        );
+        let mut create_decoder = Decoder::new(&create_request.front, create_request.front.len());
+        create_decoder.u64();
+        create_decoder.i16();
+        create_decoder.u64();
+        create_decoder.raw(16);
+        assert_eq!(create_decoder.u32(), 0);
+        assert_eq!(create_decoder.u32(), 0x01);
+        incoming_tx
+            .send(pool_operation_reply(
+                create_request.header.transaction_id,
+                osdmap.fsid(),
+                0,
+                osdmap.epoch(),
+                false,
+            ))
+            .await
+            .expect("create reply");
+        create.await.expect("join").expect("create pool");
+
+        assert_eq!(
+            client
+                .delete_pool("missing", OperationOptions::new())
+                .await
+                .expect_err("missing pool")
+                .kind(),
+            ErrorKind::NotFound
+        );
+        client
+            .shutdown(OperationOptions::new())
+            .await
+            .expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn pool_stats_missing_requested_pool_is_invalid() {
+        let (incoming_tx, incoming_rx) = mpsc::channel(8);
+        let (sent_tx, mut sent_rx) = mpsc::channel(8);
+        let session = Arc::new(FakeSession {
+            incoming: Mutex::new(incoming_rx),
+            sent: sent_tx,
+            closed: AtomicBool::new(false),
+        });
+        let opened = Arc::new(Mutex::new(Some(OpenedMonitorSession {
+            session,
+            global_id: 42,
+            client_addresses: EntityAddrVec(Vec::new()),
+        })));
+        let factory: SessionFactory = Arc::new(move |_| {
+            let opened = Arc::clone(&opened);
+            Box::pin(async move { Ok(opened.lock().await.take().expect("single session")) })
+        });
+        let client = Client::with_factory(configured(), factory).expect("client");
+        let connecting = tokio::spawn({
+            let client = client.clone();
+            async move { client.connect(OperationOptions::new()).await }
+        });
+        sent_rx.recv().await.expect("subscription");
+        let mon_bytes = include_bytes!("../testdata/p04/monmap-v9.bin");
+        let osd_bytes = include_bytes!("../testdata/p04/osdmap-v8.bin");
+        let osdmap = crate::maps::decode_osdmap(osd_bytes, MAP_LIMITS).expect("OSD map fixture");
+        incoming_tx
+            .send(monmap_message(mon_bytes))
+            .await
+            .expect("monmap");
+        incoming_tx
+            .send(osdmap_message(osdmap.fsid(), osdmap.epoch(), osd_bytes))
+            .await
+            .expect("OSD map");
+        connecting.await.expect("connect task").expect("connect");
+
+        let pool = client.resolved_pool(7, b"data").expect("pool");
+        let pending = tokio::spawn(async move { pool.stats(OperationOptions::new()).await });
+        let request = sent_rx.recv().await.expect("pool stats request");
+        incoming_tx
+            .send(pool_stats_reply(
+                request.header.transaction_id,
+                osdmap.fsid(),
+                "other",
+            ))
+            .await
+            .expect("pool stats reply");
+        assert_eq!(
+            pending
+                .await
+                .expect("join")
+                .expect_err("missing pool in stats")
+                .kind(),
+            ErrorKind::InvalidArgument
         );
         client
             .shutdown(OperationOptions::new())

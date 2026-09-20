@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha1": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "true": { "const": true },
+    "passed": { "const": "passed" },
+    "platform": { "enum": ["linux/amd64", "linux/arm64"] },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "size", "min_size", "pg_num"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "size": { "const": 1 },
+        "min_size": { "const": 1 },
+        "pg_num": { "const": 8 }
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity", "mon_caps", "mgr_caps", "osd_caps"],
+      "properties": {
+        "entity": { "type": "string", "minLength": 1 },
+        "mon_caps": { "type": "string" },
+        "mgr_caps": { "type": "string" },
+        "osd_caps": { "type": "string" }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "suite_id", "status", "started_at", "finished_at",
+    "schema_sha256", "rust", "go", "native", "server", "cluster", "probe",
+    "scenarios", "deviations"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite_id": { "const": "r12/administration-and-manager-v1" },
+    "status": { "$ref": "#/$defs/passed" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "schema_sha256": { "$ref": "#/$defs/sha256" },
+    "rust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "tree", "source_sha256", "compiler_image", "platform", "binary_sha256"],
+      "properties": {
+        "revision": { "$ref": "#/$defs/sha1" },
+        "tree": { "$ref": "#/$defs/sha1" },
+        "source_sha256": { "$ref": "#/$defs/sha256" },
+        "compiler_image": { "const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "go": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "tree", "compiler", "platform", "p11_driver_sha256", "focused_tests"],
+      "properties": {
+        "revision": { "const": "c8bb148a1379b51ef87256c27f366a05f8da4dc4" },
+        "tree": { "const": "c5039b6b50a05b942a902f70dc2fcb090463e8c7" },
+        "compiler": { "const": "go1.26.8" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "p11_driver_sha256": { "$ref": "#/$defs/sha256" },
+        "focused_tests": { "$ref": "#/$defs/passed" }
+      }
+    },
+    "native": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "binary_sha256", "admin"],
+      "properties": {
+        "version": { "enum": ["librados2-20.2.4-0.el9.x86_64", "librados2-20.2.4-0.el9.aarch64"] },
+        "binary_sha256": { "$ref": "#/$defs/sha256" },
+        "admin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cluster_stats", "pool_stats", "monitor_command", "manager_command",
+            "osd_command", "pg_command", "pool_create_delete", "application_metadata",
+            "session_addresses", "blocklist", "inconsistent_pgs"
+          ],
+          "properties": {
+            "cluster_stats": { "$ref": "#/$defs/true" },
+            "pool_stats": { "$ref": "#/$defs/true" },
+            "monitor_command": { "$ref": "#/$defs/true" },
+            "manager_command": { "$ref": "#/$defs/true" },
+            "osd_command": { "$ref": "#/$defs/true" },
+            "pg_command": { "$ref": "#/$defs/true" },
+            "pool_create_delete": { "$ref": "#/$defs/true" },
+            "application_metadata": { "$ref": "#/$defs/true" },
+            "session_addresses": { "$ref": "#/$defs/true" },
+            "blocklist": { "$ref": "#/$defs/true" },
+            "inconsistent_pgs": { "$ref": "#/$defs/true" }
+          }
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_anchor_commit", "version", "image", "binary_sha256"],
+      "properties": {
+        "source_anchor_commit": { "const": "7f793731f1b39eb4f465e960113d2363c311b964" },
+        "version": { "const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)" },
+        "image": { "const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa" },
+        "binary_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fsid", "network", "osds", "objectstore", "manager_daemons",
+        "data_pool", "native_app_pool", "admin_client", "io_client"
+      ],
+      "properties": {
+        "fsid": { "const": "22222222-3333-4333-8444-222222222222" },
+        "network": { "const": "172.30.113.0/24" },
+        "osds": { "const": 1 },
+        "objectstore": { "const": "bluestore" },
+        "manager_daemons": { "const": 2 },
+        "data_pool": { "$ref": "#/$defs/pool" },
+        "native_app_pool": { "$ref": "#/$defs/pool" },
+        "admin_client": { "$ref": "#/$defs/client" },
+        "io_client": { "$ref": "#/$defs/client" }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["admin", "recovery", "least_privilege"],
+      "properties": {
+        "admin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "cluster_stats", "pool_stats", "monitor_command", "manager_command",
+            "osd_command", "pg_command", "pool_create_delete",
+            "application_enable_list", "application_metadata_set_get_list_remove",
+            "session_addresses", "blocklist", "inconsistent_pgs",
+            "inconsistent_objects", "command_error_output_preserved"
+          ],
+          "properties": {
+            "cluster_stats": { "$ref": "#/$defs/true" },
+            "pool_stats": { "$ref": "#/$defs/true" },
+            "monitor_command": { "$ref": "#/$defs/true" },
+            "manager_command": { "$ref": "#/$defs/true" },
+            "osd_command": { "$ref": "#/$defs/true" },
+            "pg_command": { "$ref": "#/$defs/true" },
+            "pool_create_delete": { "$ref": "#/$defs/true" },
+            "application_enable_list": { "$ref": "#/$defs/true" },
+            "application_metadata_set_get_list_remove": { "$ref": "#/$defs/true" },
+            "session_addresses": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "pattern": "^v[12]:.+/[0-9]+$" }
+            },
+            "blocklist": { "$ref": "#/$defs/true" },
+            "inconsistent_pgs": { "$ref": "#/$defs/true" },
+            "inconsistent_objects": { "$ref": "#/$defs/true" },
+            "command_error_output_preserved": { "$ref": "#/$defs/true" }
+          }
+        },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["manager_before_failover", "manager_after_failover", "io_after_manager_loss"],
+          "properties": {
+            "manager_before_failover": { "$ref": "#/$defs/true" },
+            "manager_after_failover": { "$ref": "#/$defs/true" },
+            "io_after_manager_loss": { "$ref": "#/$defs/true" }
+          }
+        },
+        "least_privilege": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["write_read_without_manager"],
+          "properties": {
+            "write_read_without_manager": { "$ref": "#/$defs/true" }
+          }
+        }
+      }
+    },
+    "scenarios": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "administration", "native_conformance", "manager_failover",
+        "manager_loss_io", "least_privilege", "destructive_resource_validation"
+      ],
+      "properties": {
+        "administration": { "$ref": "#/$defs/passed" },
+        "native_conformance": { "$ref": "#/$defs/passed" },
+        "manager_failover": { "$ref": "#/$defs/passed" },
+        "manager_loss_io": { "$ref": "#/$defs/passed" },
+        "least_privilege": { "$ref": "#/$defs/passed" },
+        "destructive_resource_validation": { "$ref": "#/$defs/passed" }
+      }
+    },
+    "deviations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_partial_status", "destructive_scope"],
+      "properties": {
+        "command_partial_status": { "const": "Manager, monitor, OSD, and PG command wire errors preserve the last CommandResult status and output on the returned tuple." },
+        "destructive_scope": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

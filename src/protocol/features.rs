@@ -9,6 +9,7 @@ impl GlobalFeatures {
     pub(crate) const SERVER_MIMIC_INCARNATION: Self = Self((1 << 57) | (1 << 28));
     pub(crate) const SERVER_NAUTILUS_MASK: Self =
         Self(Self::SERVER_NAUTILUS.0 | Self::SERVER_MIMIC_INCARNATION.0);
+    pub(crate) const SERVER_OCTOPUS_MASK: Self = Self((1 << 16) | Self::SERVER_MIMIC_INCARNATION.0);
     pub(crate) const MESSAGE_ADDRESS_V2: Self = Self(1 << 59);
     pub(crate) const OSD_REPLY_MUX: Self = Self(1 << 12);
     pub(crate) const NEW_OSD_OP_ENCODING: Self = Self(1 << 56);

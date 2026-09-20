@@ -23,6 +23,7 @@ const OP_GET_XATTR: u16 = 0x1301;
 const OP_GET_XATTRS: u16 = 0x1302;
 const OP_CALL: u16 = 0x1401;
 const OP_PGN_LIST: u16 = 0x1505;
+const OP_SCRUB_LIST: u16 = 0x1507;
 const OP_WRITE: u16 = 0x2201;
 const OP_WRITE_FULL: u16 = 0x2202;
 const OP_TRUNCATE: u16 = 0x2203;
@@ -132,6 +133,7 @@ pub(crate) enum Operation {
         count: u64,
         start_epoch: u32,
     },
+    ScrubList(Vec<u8>),
     Create {
         exclusive: bool,
     },
@@ -203,6 +205,7 @@ impl Operation {
             Self::Call { .. } => OP_CALL,
             Self::Watch { .. } => OP_WATCH,
             Self::PGNList { .. } => OP_PGN_LIST,
+            Self::ScrubList(_) => OP_SCRUB_LIST,
             Self::Create { .. } => OP_CREATE,
             Self::Write { .. } => OP_WRITE,
             Self::WriteFull(_) => OP_WRITE_FULL,
@@ -257,7 +260,8 @@ impl Operation {
             | Self::Call { data, .. }
             | Self::Notify { data, .. }
             | Self::NotifyAck { data, .. }
-            | Self::PGNList { cursor: data, .. } => output.extend_from_slice(data),
+            | Self::PGNList { cursor: data, .. }
+            | Self::ScrubList(data) => output.extend_from_slice(data),
             Self::SetXattr { name, value } => {
                 output.extend_from_slice(name);
                 output.extend_from_slice(value);
@@ -291,7 +295,8 @@ impl Operation {
             | Self::Call { data, .. }
             | Self::Notify { data, .. }
             | Self::NotifyAck { data, .. }
-            | Self::PGNList { cursor: data, .. } => data.len(),
+            | Self::PGNList { cursor: data, .. }
+            | Self::ScrubList(data) => data.len(),
             _ => 0,
         }
     }
@@ -666,7 +671,8 @@ fn encode_operation(encoder: &mut Encoder, operation: &Operation) {
             encoder.u32(*start_epoch);
             encoder.raw(&[0; 16]);
         }
-        Operation::Stat
+        Operation::ScrubList(_)
+        | Operation::Stat
         | Operation::ListWatchers
         | Operation::OmapGetHeader
         | Operation::OmapClear
@@ -1224,6 +1230,12 @@ mod tests {
                 0,
                 vec![5, 6, 7],
             ),
+            (
+                Operation::ScrubList(vec![9, 8, 7]),
+                OP_SCRUB_LIST,
+                0,
+                vec![9, 8, 7],
+            ),
         ];
         for (operation, opcode, flags, payload) in cases {
             assert_descriptor(&operation, opcode, flags, &payload);
@@ -1246,6 +1258,15 @@ mod tests {
             &[
                 3, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 2
             ]
+        );
+
+        let mut scrub = Encoder::new(64);
+        encode_operation(&mut scrub, &Operation::ScrubList(vec![1, 2, 3]));
+        let scrub = scrub.finish().expect("scrub");
+        assert_eq!(&scrub[6..34], vec![0_u8; 28]);
+        assert_eq!(
+            u32::from_le_bytes(scrub[34..].try_into().expect("length")),
+            3
         );
     }
 

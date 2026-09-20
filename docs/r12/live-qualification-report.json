@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "suite_id": "r12/administration-and-manager-v1",
+  "status": "passed",
+  "started_at": "2026-09-20T23:29:02Z",
+  "finished_at": "2026-09-20T23:31:22Z",
+  "schema_sha256": "08eb12f830441ce76f9e0977b514654b0aef002042de4e3677eeb0b22580086e",
+  "rust": {
+    "revision": "5218b82bd1037e516e0d3e49925145be47f4f518",
+    "tree": "9d1da604fac39d8ec76bb9159f7133f0cf50e99c",
+    "source_sha256": "b16e77fd9e194db6e83a26d7b8022bc2cab84f6884ef0366327576c528d45b27",
+    "compiler_image": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922",
+    "platform": "linux/arm64",
+    "binary_sha256": "2122871ba096ae9034f6bbe8712751fcf7cce70f7ade5449bb1c2a6a3e2529d0"
+  },
+  "go": {
+    "revision": "c8bb148a1379b51ef87256c27f366a05f8da4dc4",
+    "tree": "c5039b6b50a05b942a902f70dc2fcb090463e8c7",
+    "compiler": "go1.26.8",
+    "platform": "linux/arm64",
+    "p11_driver_sha256": "848a179dafdb191c9900de8bc6a58178166c5d50d1afabffc820c03d8331e653",
+    "focused_tests": "passed"
+  },
+  "native": {
+    "version": "librados2-20.2.4-0.el9.aarch64",
+    "binary_sha256": "925fe62a67ec4398c0630cfc775f17f2c4c9ab5ed79de717e81c761b9421a1e0",
+    "admin": {
+      "cluster_stats": true,
+      "pool_stats": true,
+      "monitor_command": true,
+      "manager_command": true,
+      "osd_command": true,
+      "pg_command": true,
+      "pool_create_delete": true,
+      "application_metadata": true,
+      "session_addresses": true,
+      "blocklist": true,
+      "inconsistent_pgs": true
+    }
+  },
+  "server": {
+    "source_anchor_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "image": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa",
+    "binary_sha256": "5fbad656b7f1bd900a0c40990a81be8dff523555ed0b2c957e38f29beb33608a"
+  },
+  "cluster": {
+    "fsid": "22222222-3333-4333-8444-222222222222",
+    "network": "172.30.113.0/24",
+    "osds": 1,
+    "objectstore": "bluestore",
+    "manager_daemons": 2,
+    "data_pool": {
+      "name": "p12-data",
+      "size": 1,
+      "min_size": 1,
+      "pg_num": 8
+    },
+    "native_app_pool": {
+      "name": "p12-native-app",
+      "size": 1,
+      "min_size": 1,
+      "pg_num": 8
+    },
+    "admin_client": {
+      "entity": "client.p12-admin",
+      "mon_caps": "allow *",
+      "mgr_caps": "allow *",
+      "osd_caps": "allow *"
+    },
+    "io_client": {
+      "entity": "client.p12-io",
+      "mon_caps": "allow r",
+      "mgr_caps": "",
+      "osd_caps": "allow rw pool=p12-data"
+    }
+  },
+  "probe": {
+    "admin": {
+      "cluster_stats": true,
+      "pool_stats": true,
+      "monitor_command": true,
+      "manager_command": true,
+      "osd_command": true,
+      "pg_command": true,
+      "pool_create_delete": true,
+      "application_enable_list": true,
+      "application_metadata_set_get_list_remove": true,
+      "session_addresses": [
+        "v2:0.0.0.0:0/3637765898"
+      ],
+      "blocklist": true,
+      "inconsistent_pgs": true,
+      "inconsistent_objects": true,
+      "command_error_output_preserved": true
+    },
+    "recovery": {
+      "manager_before_failover": true,
+      "manager_after_failover": true,
+      "io_after_manager_loss": true
+    },
+    "least_privilege": {
+      "write_read_without_manager": true
+    }
+  },
+  "scenarios": {
+    "administration": "passed",
+    "native_conformance": "passed",
+    "manager_failover": "passed",
+    "manager_loss_io": "passed",
+    "least_privilege": "passed",
+    "destructive_resource_validation": "passed"
+  },
+  "deviations": {
+    "command_partial_status": "Manager, monitor, OSD, and PG command wire errors preserve the last CommandResult status and output on the returned tuple.",
+    "destructive_scope": "Pool create, delete, blocklist, and application metadata operations are constrained to disposable p12-rust-created, p12-native-created, and p12-native-app resources plus the fresh p12-data snapshot."
+  }
+}

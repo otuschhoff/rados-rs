@@ -31,8 +31,13 @@ impl MgrMap {
     pub(crate) fn active_name(&self) -> &str {
         &self.active_name
     }
-    pub(crate) fn active_addresses(&self) -> &EntityAddrVec {
-        &self.active_addresses
+    pub(crate) fn active_v2_address(&self) -> Option<&crate::protocol::address::EntityAddr> {
+        self.active_addresses.0.iter().find(|address| {
+            address.is_v2()
+                && address
+                    .endpoint()
+                    .is_some_and(|endpoint| endpoint.port() != 0)
+        })
     }
     pub(crate) fn active_features(&self) -> u64 {
         self.active_features
@@ -256,5 +261,32 @@ fn decode_canonical_bool(decoder: &mut Decoder<'_>) -> Result<bool> {
         0 => Ok(false),
         1 => Ok(true),
         _ => Err(MapError::Malformed("non-canonical boolean")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_v2_address_prefers_v2_when_v1_precedes_it() {
+        let mgrmap = MgrMap {
+            epoch: 1,
+            active_gid: 1,
+            available: true,
+            active_name: "mgr.a".to_owned(),
+            active_addresses: EntityAddrVec(vec![
+                crate::protocol::address::parse_entity_addr("v1:192.0.2.5:6789/1").expect("v1"),
+                crate::protocol::address::parse_entity_addr("v2:192.0.2.5:3300/2").expect("v2"),
+            ]),
+            active_features: 0,
+        };
+        let selected = mgrmap.active_v2_address().expect("active v2 address");
+        assert!(selected.is_v2());
+        assert_eq!(selected.nonce(), 2);
+        assert_eq!(
+            selected.endpoint().expect("endpoint").to_string(),
+            "192.0.2.5:3300"
+        );
     }
 }

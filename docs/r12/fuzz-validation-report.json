@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "suite_id": "r12/fuzz-task-validation-v1",
+  "status": "passed",
+  "started_at": "2026-09-20T23:31:55Z",
+  "finished_at": "2026-09-20T23:35:05Z",
+  "source_sha256": "b16e77fd9e194db6e83a26d7b8022bc2cab84f6884ef0366327576c528d45b27",
+  "rustc": "rustc 1.100.0-nightly (0dfb098f3 2026-08-31)",
+  "cargo_fuzz": "cargo-fuzz 0.13.2",
+  "campaigns": [
+    {
+      "target": "r12_command",
+      "budget_seconds": 60,
+      "executions": 2678093,
+      "executions_per_second": 43903,
+      "corpus_sha256": "0903e4094fa1d56c5a75cc1d1ee41699f91e9e3452d9bb76164cd997547d6821",
+      "target_sha256": "eb8b10217e3b26cbf5a67abd0ff42105744d6ad567753c54eac937a8a439921d",
+      "output_path": "fuzz-validation-logs/r12_command.log",
+      "output_sha256": "d91625fb6338638d1527b34c3f55fe5b0272215359945147b966c0aad5978f7a",
+      "status": "passed"
+    },
+    {
+      "target": "r12_stats",
+      "budget_seconds": 60,
+      "executions": 2710857,
+      "executions_per_second": 44440,
+      "corpus_sha256": "42f4d7ec2d828aa27bc04dbba742d1df31903bc41492eaaefcf7802e8a6f6c47",
+      "target_sha256": "0dafdecf5f225b9f32e3bf117c2ab2a3f5f5cf290e817b15a0736b6b413af973",
+      "output_path": "fuzz-validation-logs/r12_stats.log",
+      "output_sha256": "9e17940af3be00d5a11e86f29ad47da6b277a367c832a9c07ebf43d731c226bd",
+      "status": "passed"
+    },
+    {
+      "target": "r12_inconsistent",
+      "budget_seconds": 60,
+      "executions": 2433975,
+      "executions_per_second": 39901,
+      "corpus_sha256": "533d9dfa81d7692e11208a6c292c3a988ae1fe55a70aa396bbacf79836300511",
+      "target_sha256": "7ae3733a76dfa9722143d4b5956e59015e35a61f26cb0671dd84ed5ea18f4749",
+      "output_path": "fuzz-validation-logs/r12_inconsistent.log",
+      "output_sha256": "fda4f3fcfc1d23081b3fda071e3e24779fbe5da8d8a56878b3ae82f2137a2110",
+      "status": "passed"
+    }
+  ]
+}

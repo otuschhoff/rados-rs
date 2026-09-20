@@ -1,0 +1,940 @@
+warning: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> /Users/oli/proj/rados-rs/src/msgr/supervisor.rs:123:14
+    |
+123 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |              ^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+help: replace the use of the deprecated method
+    |
+123 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+123 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> /Users/oli/proj/rados-rs/src/osd/client.rs:651:14
+    |
+651 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+651 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+651 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |
+
+warning: `rados-rs` (lib) generated 2 warnings (run `cargo fix --lib -p rados-rs` to apply 2 suggestions)
+warning: methods `i8`, `i16`, and `string` are never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/wire/codec.rs:75:19
+    |
+ 33 | impl Encoder {
+    | ------------ methods in this implementation
+...
+ 75 |     pub(crate) fn i8(&mut self, value: i8) {
+    |                   ^^
+...
+ 79 |     pub(crate) fn i16(&mut self, value: i16) {
+    |                   ^^^
+...
+104 |     pub(crate) fn string(&mut self, value: &str) {
+    |                   ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `entity` and `created` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/mod.rs:85:19
+   |
+84 | impl Credential {
+   | --------------- methods in this implementation
+85 |     pub(crate) fn entity(&self) -> &str {
+   |                   ^^^^^^
+...
+89 |     pub(crate) const fn created(&self) -> (u32, u32) {
+   |                         ^^^^^^^
+
+warning: constant `AUTH_MODE_MON` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:15:18
+   |
+15 | pub(crate) const AUTH_MODE_MON: u8 = 10;
+   |                  ^^^^^^^^^^^^^
+
+warning: constant `SERVICE_OSD` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:20:18
+   |
+20 | pub(crate) const SERVICE_OSD: u32 = 0x04;
+   |                  ^^^^^^^^^^^
+
+warning: constant `SERVICE_MANAGER` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:21:18
+   |
+21 | pub(crate) const SERVICE_MANAGER: u32 = 0x10;
+   |                  ^^^^^^^^^^^^^^^
+
+warning: constant `ENTITY_CLIENT` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:24:7
+   |
+24 | const ENTITY_CLIENT: u32 = 0x08;
+   |       ^^^^^^^^^^^^^
+
+warning: constant `GET_PRINCIPAL_SESSION_KEY` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:26:7
+   |
+26 | const GET_PRINCIPAL_SESSION_KEY: u16 = 0x0200;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `auth_session_key` is never read
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:92:16
+   |
+90 | pub(crate) struct AuthSessionReply {
+   |                   ---------------- field in this struct
+91 |     pub(crate) request_type: u16,
+92 |     pub(crate) auth_session_key: CryptoKey,
+   |                ^^^^^^^^^^^^^^^^
+
+warning: function `build_initial_payload` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:151:15
+    |
+151 | pub(crate) fn build_initial_payload(
+    |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_challenge_request` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:182:15
+    |
+182 | pub(crate) fn build_challenge_request(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_service_ticket_request` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:209:15
+    |
+209 | pub(crate) fn build_service_ticket_request(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_authorizer` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:314:15
+    |
+314 | pub(crate) fn build_authorizer(
+    |               ^^^^^^^^^^^^^^^^
+
+warning: function `encode_ticket_blob` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:575:4
+    |
+575 | fn encode_ticket_blob(encoder: &mut Encoder, ticket: &TicketBlob) {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `calculate_challenge` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:356:15
+    |
+356 | pub(crate) fn calculate_challenge(
+    |               ^^^^^^^^^^^^^^^^^^^
+
+warning: function `transcript_signature` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:392:15
+    |
+392 | pub(crate) fn transcript_signature(secret: &CryptoKey, transcript: &[u8...
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `verify_transcript_signature` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:399:15
+    |
+399 | pub(crate) fn verify_transcript_signature(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated constants are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:5:22
+   |
+ 4 | impl GlobalFeatures {
+   | ------------------- associated constants in this implementation
+ 5 |     pub(crate) const MONITOR_NAMES: Self = Self(1 << 5);
+   |                      ^^^^^^^^^^^^^
+ 6 |     pub(crate) const MONITOR_ENCODING: Self = Self(1 << 15);
+   |                      ^^^^^^^^^^^^^^^^
+ 7 |     pub(crate) const PGID64: Self = Self(1 << 9);
+   |                      ^^^^^^
+...
+12 |     pub(crate) const SERVER_OCTOPUS_MASK: Self = Self((1 << 16) | Self::...
+   |                      ^^^^^^^^^^^^^^^^^^^
+13 |     pub(crate) const MESSAGE_ADDRESS_V2: Self = Self(1 << 59);
+14 |     pub(crate) const OSD_REPLY_MUX: Self = Self(1 << 12);
+   |                      ^^^^^^^^^^^^^
+15 |     pub(crate) const NEW_OSD_OP_ENCODING: Self = Self(1 << 56);
+   |                      ^^^^^^^^^^^^^^^^^^^
+16 |     pub(crate) const NEW_OSD_OP_REPLY_ENCODING: Self = Self(1 << 58);
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+17 |     pub(crate) const CRUSH_V2: Self = Self(1 << 36);
+   |                      ^^^^^^^^
+18 |     pub(crate) const RESERVED: Self = Self(1 << 62);
+   |                      ^^^^^^^^
+19 |     pub(crate) const OSD_MAP_ENCODING: Self = Self(0x0f04_0880_9021_2a04);
+   |                      ^^^^^^^^^^^^^^^^
+20 |     pub(crate) const MONITOR_CLIENT: Self = Self(0x2f07_0a92_d235_ea24);
+   |                      ^^^^^^^^^^^^^^
+21 |     pub(crate) const OSD_CLIENT: Self = Self(0x2f07_0a92_d235_fa24);
+   |                      ^^^^^^^^^^
+
+warning: struct `MessengerFeatures` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:37:19
+   |
+37 | pub(crate) struct MessengerFeatures(pub(crate) u64);
+   |                   ^^^^^^^^^^^^^^^^^
+
+warning: associated items `REVISION_1`, `COMPRESSION`, and `contains` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:40:22
+   |
+39 | impl MessengerFeatures {
+   | ---------------------- associated items in this implementation
+40 |     pub(crate) const REVISION_1: Self = Self(1 << 0);
+   |                      ^^^^^^^^^^
+41 |     pub(crate) const COMPRESSION: Self = Self(1 << 1);
+   |                      ^^^^^^^^^^^
+42 |
+43 |     pub(crate) const fn contains(self, mask: Self) -> bool {
+   |                         ^^^^^^^^
+
+warning: associated constant `V2` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:17:11
+   |
+14 | impl AddressType {
+   | ---------------- associated constant in this implementation
+...
+17 |     const V2: Self = Self(2);
+   |           ^^
+
+warning: associated items `ipv4_v2`, `with_nonce`, `nonce`, `is_v2`, and `endpoint` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:42:19
+   |
+41 | impl EntityAddr {
+   | --------------- associated items in this implementation
+42 |     pub(crate) fn ipv4_v2(endpoint: SocketAddr) -> Result<Self, WireErro...
+   |                   ^^^^^^^
+...
+58 |     pub(crate) fn with_nonce(mut self, nonce: u32) -> Self {
+   |                   ^^^^^^^^^^
+...
+63 |     pub(crate) const fn nonce(&self) -> u32 {
+   |                         ^^^^^
+...
+67 |     pub(crate) fn is_v2(&self) -> bool {
+   |                   ^^^^^
+...
+71 |     pub(crate) fn endpoint(&self) -> Option<SocketAddr> {
+   |                   ^^^^^^^^
+
+warning: function `parse_entity_addr` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:222:15
+    |
+222 | pub(crate) fn parse_entity_addr(value: &str) -> Result<EntityAddr, Wire...
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `parse_entity_endpoint` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:264:4
+    |
+264 | fn parse_entity_endpoint(value: &str) -> Result<SocketAddr, WireError> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `entity_addr_from_endpoint` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:273:4
+    |
+273 | fn entity_addr_from_endpoint(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `REVISION_1_FEATURES` is never used
+ --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/banner.rs:6:18
+  |
+6 | pub(crate) const REVISION_1_FEATURES: u64 = 1;
+  |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `client` and `negotiate` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/banner.rs:15:25
+   |
+14 | impl Banner {
+   | ----------- associated items in this implementation
+15 |     pub(crate) const fn client() -> Self {
+   |                         ^^^^^^
+...
+59 |     pub(crate) fn negotiate(self, peer: Self) -> Result<u64, FrameError> {
+   |                   ^^^^^^^^^
+
+warning: variant `AuthPayload` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/control.rs:123:5
+    |
+103 | pub(crate) enum Control {
+    |                 ------- variant in this enum
+...
+123 |     AuthPayload { tag: Tag, payload: Vec<u8> },
+    |     ^^^^^^^^^^^
+    |
+    = note: `Control` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `UnsupportedFeature` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:102:5
+    |
+ 95 | pub(crate) enum FrameError {
+    |                 ---------- variant in this enum
+...
+102 |     UnsupportedFeature,
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `FrameError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `read_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:224:25
+    |
+143 | impl CrcCodec {
+    | ------------- method in this implementation
+...
+224 |     pub(crate) async fn read_async(
+    |                         ^^^^^^^^^^
+
+warning: function `read_exact_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:276:10
+    |
+276 | async fn read_exact_async(
+    |          ^^^^^^^^^^^^^^^^
+
+warning: struct `SecureEncoder` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:28:19
+   |
+28 | pub(crate) struct SecureEncoder(SecureCodec);
+   |                   ^^^^^^^^^^^^^
+
+warning: struct `SecureDecoder` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:30:19
+   |
+30 | pub(crate) struct SecureDecoder(SecureCodec);
+   |                   ^^^^^^^^^^^^^
+
+warning: methods `split` and `read_async` are never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:58:19
+    |
+ 40 | impl SecureCodec {
+    | ---------------- methods in this implementation
+...
+ 58 |     pub(crate) fn split(self) -> (SecureEncoder, SecureDecoder) {
+    |                   ^^^^^
+...
+201 |     pub(crate) async fn read_async(
+    |                         ^^^^^^^^^^
+
+warning: method `encode` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:297:19
+    |
+296 | impl SecureEncoder {
+    | ------------------ method in this implementation
+297 |     pub(crate) fn encode(&mut self, frame: &Frame, limits: Limits) -> R...
+    |                   ^^^^^^
+
+warning: method `read` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:303:25
+    |
+302 | impl SecureDecoder {
+    | ------------------ method in this implementation
+303 |     pub(crate) async fn read(
+    |                         ^^^^
+
+warning: function `read_exact_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:505:10
+    |
+505 | async fn read_exact_async(
+    |          ^^^^^^^^^^^^^^^^
+
+warning: variant `TooManyInFlight` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:32:5
+   |
+27 | pub(crate) enum SessionError {
+   |                 ------------ variant in this enum
+...
+32 |     TooManyInFlight,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `SessionError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variants `InitialConnection`, `InitialIdentity`, `Connected`, `RenewalDue`, and `Stop` are never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:65:5
+    |
+ 61 | pub(crate) enum Input {
+    |                 ----- variants in this enum
+...
+ 65 |     InitialConnection {
+    |     ^^^^^^^^^^^^^^^^^
+...
+ 69 |     InitialIdentity {
+    |     ^^^^^^^^^^^^^^^
+...
+ 88 |     Connected {
+    |     ^^^^^^^^^
+...
+108 |     RenewalDue {
+    |     ^^^^^^^^^^
+...
+112 |     Stop,
+    |     ^^^^
+    |
+    = note: `Input` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `EventsDropped` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:130:5
+    |
+116 | pub(crate) enum Event {
+    |                 ----- variant in this enum
+...
+130 |     EventsDropped { count: u64 },
+    |     ^^^^^^^^^^^^^
+    |
+    = note: `Event` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `limits` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:467:19
+    |
+258 | impl Machine {
+    | ------------ method in this implementation
+...
+467 |     pub(crate) fn limits(&self) -> Limits {
+    |                   ^^^^^^
+
+warning: `rados-r02-fuzz` (lib) generated 40 warnings
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.23s
+warning: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> /Users/oli/proj/rados-rs/src/msgr/supervisor.rs:123:14
+    |
+123 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |              ^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+help: replace the use of the deprecated method
+    |
+123 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+123 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<u64>::fetch_update`: renamed to `try_update` for consistency
+   --> /Users/oli/proj/rados-rs/src/osd/client.rs:651:14
+    |
+651 |             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |              ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+651 -             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+651 +             .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    |
+
+warning: `rados-rs` (lib) generated 2 warnings (run `cargo fix --lib -p rados-rs` to apply 2 suggestions)
+warning: methods `i8`, `i16`, and `string` are never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/wire/codec.rs:75:19
+    |
+ 33 | impl Encoder {
+    | ------------ methods in this implementation
+...
+ 75 |     pub(crate) fn i8(&mut self, value: i8) {
+    |                   ^^
+...
+ 79 |     pub(crate) fn i16(&mut self, value: i16) {
+    |                   ^^^
+...
+104 |     pub(crate) fn string(&mut self, value: &str) {
+    |                   ^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `entity` and `created` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/mod.rs:85:19
+   |
+84 | impl Credential {
+   | --------------- methods in this implementation
+85 |     pub(crate) fn entity(&self) -> &str {
+   |                   ^^^^^^
+...
+89 |     pub(crate) const fn created(&self) -> (u32, u32) {
+   |                         ^^^^^^^
+
+warning: constant `AUTH_MODE_MON` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:15:18
+   |
+15 | pub(crate) const AUTH_MODE_MON: u8 = 10;
+   |                  ^^^^^^^^^^^^^
+
+warning: constant `SERVICE_OSD` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:20:18
+   |
+20 | pub(crate) const SERVICE_OSD: u32 = 0x04;
+   |                  ^^^^^^^^^^^
+
+warning: constant `SERVICE_MANAGER` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:21:18
+   |
+21 | pub(crate) const SERVICE_MANAGER: u32 = 0x10;
+   |                  ^^^^^^^^^^^^^^^
+
+warning: constant `ENTITY_CLIENT` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:24:7
+   |
+24 | const ENTITY_CLIENT: u32 = 0x08;
+   |       ^^^^^^^^^^^^^
+
+warning: constant `GET_PRINCIPAL_SESSION_KEY` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:26:7
+   |
+26 | const GET_PRINCIPAL_SESSION_KEY: u16 = 0x0200;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `auth_session_key` is never read
+  --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:92:16
+   |
+90 | pub(crate) struct AuthSessionReply {
+   |                   ---------------- field in this struct
+91 |     pub(crate) request_type: u16,
+92 |     pub(crate) auth_session_key: CryptoKey,
+   |                ^^^^^^^^^^^^^^^^
+
+warning: function `build_initial_payload` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:151:15
+    |
+151 | pub(crate) fn build_initial_payload(
+    |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_challenge_request` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:182:15
+    |
+182 | pub(crate) fn build_challenge_request(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_service_ticket_request` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:209:15
+    |
+209 | pub(crate) fn build_service_ticket_request(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `build_authorizer` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:314:15
+    |
+314 | pub(crate) fn build_authorizer(
+    |               ^^^^^^^^^^^^^^^^
+
+warning: function `encode_ticket_blob` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/core.rs:575:4
+    |
+575 | fn encode_ticket_blob(encoder: &mut Encoder, ticket: &TicketBlob) {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `calculate_challenge` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:356:15
+    |
+356 | pub(crate) fn calculate_challenge(
+    |               ^^^^^^^^^^^^^^^^^^^
+
+warning: function `transcript_signature` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:392:15
+    |
+392 | pub(crate) fn transcript_signature(secret: &CryptoKey, transcript: &[u8...
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `verify_transcript_signature` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/cephx/crypto.rs:399:15
+    |
+399 | pub(crate) fn verify_transcript_signature(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple associated constants are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:5:22
+   |
+ 4 | impl GlobalFeatures {
+   | ------------------- associated constants in this implementation
+ 5 |     pub(crate) const MONITOR_NAMES: Self = Self(1 << 5);
+   |                      ^^^^^^^^^^^^^
+ 6 |     pub(crate) const MONITOR_ENCODING: Self = Self(1 << 15);
+   |                      ^^^^^^^^^^^^^^^^
+ 7 |     pub(crate) const PGID64: Self = Self(1 << 9);
+   |                      ^^^^^^
+...
+12 |     pub(crate) const SERVER_OCTOPUS_MASK: Self = Self((1 << 16) | Self::...
+   |                      ^^^^^^^^^^^^^^^^^^^
+13 |     pub(crate) const MESSAGE_ADDRESS_V2: Self = Self(1 << 59);
+14 |     pub(crate) const OSD_REPLY_MUX: Self = Self(1 << 12);
+   |                      ^^^^^^^^^^^^^
+15 |     pub(crate) const NEW_OSD_OP_ENCODING: Self = Self(1 << 56);
+   |                      ^^^^^^^^^^^^^^^^^^^
+16 |     pub(crate) const NEW_OSD_OP_REPLY_ENCODING: Self = Self(1 << 58);
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+17 |     pub(crate) const CRUSH_V2: Self = Self(1 << 36);
+   |                      ^^^^^^^^
+18 |     pub(crate) const RESERVED: Self = Self(1 << 62);
+   |                      ^^^^^^^^
+19 |     pub(crate) const OSD_MAP_ENCODING: Self = Self(0x0f04_0880_9021_2a04);
+   |                      ^^^^^^^^^^^^^^^^
+20 |     pub(crate) const MONITOR_CLIENT: Self = Self(0x2f07_0a92_d235_ea24);
+   |                      ^^^^^^^^^^^^^^
+21 |     pub(crate) const OSD_CLIENT: Self = Self(0x2f07_0a92_d235_fa24);
+   |                      ^^^^^^^^^^
+
+warning: struct `MessengerFeatures` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:37:19
+   |
+37 | pub(crate) struct MessengerFeatures(pub(crate) u64);
+   |                   ^^^^^^^^^^^^^^^^^
+
+warning: associated items `REVISION_1`, `COMPRESSION`, and `contains` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/features.rs:40:22
+   |
+39 | impl MessengerFeatures {
+   | ---------------------- associated items in this implementation
+40 |     pub(crate) const REVISION_1: Self = Self(1 << 0);
+   |                      ^^^^^^^^^^
+41 |     pub(crate) const COMPRESSION: Self = Self(1 << 1);
+   |                      ^^^^^^^^^^^
+42 |
+43 |     pub(crate) const fn contains(self, mask: Self) -> bool {
+   |                         ^^^^^^^^
+
+warning: associated constant `V2` is never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:17:11
+   |
+14 | impl AddressType {
+   | ---------------- associated constant in this implementation
+...
+17 |     const V2: Self = Self(2);
+   |           ^^
+
+warning: associated items `ipv4_v2`, `with_nonce`, `nonce`, `is_v2`, and `endpoint` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:42:19
+   |
+41 | impl EntityAddr {
+   | --------------- associated items in this implementation
+42 |     pub(crate) fn ipv4_v2(endpoint: SocketAddr) -> Result<Self, WireErro...
+   |                   ^^^^^^^
+...
+58 |     pub(crate) fn with_nonce(mut self, nonce: u32) -> Self {
+   |                   ^^^^^^^^^^
+...
+63 |     pub(crate) const fn nonce(&self) -> u32 {
+   |                         ^^^^^
+...
+67 |     pub(crate) fn is_v2(&self) -> bool {
+   |                   ^^^^^
+...
+71 |     pub(crate) fn endpoint(&self) -> Option<SocketAddr> {
+   |                   ^^^^^^^^
+
+warning: function `parse_entity_addr` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:222:15
+    |
+222 | pub(crate) fn parse_entity_addr(value: &str) -> Result<EntityAddr, Wire...
+    |               ^^^^^^^^^^^^^^^^^
+
+warning: function `parse_entity_endpoint` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:264:4
+    |
+264 | fn parse_entity_endpoint(value: &str) -> Result<SocketAddr, WireError> {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `entity_addr_from_endpoint` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/protocol/address.rs:273:4
+    |
+273 | fn entity_addr_from_endpoint(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `REVISION_1_FEATURES` is never used
+ --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/banner.rs:6:18
+  |
+6 | pub(crate) const REVISION_1_FEATURES: u64 = 1;
+  |                  ^^^^^^^^^^^^^^^^^^^
+
+warning: associated items `client` and `negotiate` are never used
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/banner.rs:15:25
+   |
+14 | impl Banner {
+   | ----------- associated items in this implementation
+15 |     pub(crate) const fn client() -> Self {
+   |                         ^^^^^^
+...
+59 |     pub(crate) fn negotiate(self, peer: Self) -> Result<u64, FrameError> {
+   |                   ^^^^^^^^^
+
+warning: variant `AuthPayload` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/control.rs:123:5
+    |
+103 | pub(crate) enum Control {
+    |                 ------- variant in this enum
+...
+123 |     AuthPayload { tag: Tag, payload: Vec<u8> },
+    |     ^^^^^^^^^^^
+    |
+    = note: `Control` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `UnsupportedFeature` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:102:5
+    |
+ 95 | pub(crate) enum FrameError {
+    |                 ---------- variant in this enum
+...
+102 |     UnsupportedFeature,
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `FrameError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `read_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:224:25
+    |
+143 | impl CrcCodec {
+    | ------------- method in this implementation
+...
+224 |     pub(crate) async fn read_async(
+    |                         ^^^^^^^^^^
+
+warning: function `read_exact_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/frame.rs:276:10
+    |
+276 | async fn read_exact_async(
+    |          ^^^^^^^^^^^^^^^^
+
+warning: struct `SecureEncoder` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:28:19
+   |
+28 | pub(crate) struct SecureEncoder(SecureCodec);
+   |                   ^^^^^^^^^^^^^
+
+warning: struct `SecureDecoder` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:30:19
+   |
+30 | pub(crate) struct SecureDecoder(SecureCodec);
+   |                   ^^^^^^^^^^^^^
+
+warning: methods `split` and `read_async` are never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:58:19
+    |
+ 40 | impl SecureCodec {
+    | ---------------- methods in this implementation
+...
+ 58 |     pub(crate) fn split(self) -> (SecureEncoder, SecureDecoder) {
+    |                   ^^^^^
+...
+201 |     pub(crate) async fn read_async(
+    |                         ^^^^^^^^^^
+
+warning: method `encode` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:297:19
+    |
+296 | impl SecureEncoder {
+    | ------------------ method in this implementation
+297 |     pub(crate) fn encode(&mut self, frame: &Frame, limits: Limits) -> R...
+    |                   ^^^^^^
+
+warning: method `read` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:303:25
+    |
+302 | impl SecureDecoder {
+    | ------------------ method in this implementation
+303 |     pub(crate) async fn read(
+    |                         ^^^^
+
+warning: function `read_exact_async` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/secure.rs:505:10
+    |
+505 | async fn read_exact_async(
+    |          ^^^^^^^^^^^^^^^^
+
+warning: variant `TooManyInFlight` is never constructed
+  --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:32:5
+   |
+27 | pub(crate) enum SessionError {
+   |                 ------------ variant in this enum
+...
+32 |     TooManyInFlight,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `SessionError` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variants `InitialConnection`, `InitialIdentity`, `Connected`, `RenewalDue`, and `Stop` are never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:65:5
+    |
+ 61 | pub(crate) enum Input {
+    |                 ----- variants in this enum
+...
+ 65 |     InitialConnection {
+    |     ^^^^^^^^^^^^^^^^^
+...
+ 69 |     InitialIdentity {
+    |     ^^^^^^^^^^^^^^^
+...
+ 88 |     Connected {
+    |     ^^^^^^^^^
+...
+108 |     RenewalDue {
+    |     ^^^^^^^^^^
+...
+112 |     Stop,
+    |     ^^^^
+    |
+    = note: `Input` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: variant `EventsDropped` is never constructed
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:130:5
+    |
+116 | pub(crate) enum Event {
+    |                 ----- variant in this enum
+...
+130 |     EventsDropped { count: u64 },
+    |     ^^^^^^^^^^^^^
+    |
+    = note: `Event` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: method `limits` is never used
+   --> /Users/oli/proj/rados-rs/fuzz/../src/msgr/session.rs:467:19
+    |
+258 | impl Machine {
+    | ------------ method in this implementation
+...
+467 |     pub(crate) fn limits(&self) -> Limits {
+    |                   ^^^^^^
+
+warning: `rados-r02-fuzz` (lib) generated 40 warnings
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.09s
+     Running `fuzz/target/aarch64-apple-darwin/release/r12_inconsistent -artifact_prefix=/Users/oli/proj/rados-rs/fuzz/artifacts/r12_inconsistent/ -max_total_time=60 -print_final_stats=1 -verbosity=0 /var/folders/w6/z5pmj33j7rxg071c84mwvrzc0000gn/T/tmp.tmnOUlBsrx/corpus/r12_inconsistent`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO:        5 files found in /var/folders/w6/z5pmj33j7rxg071c84mwvrzc0000gn/T/tmp.tmnOUlBsrx/corpus/r12_inconsistent
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: seed corpus: files: 5 min: 2b max: 45b total: 116b rss: 51Mb
+	NEW_FUNC[1/2]: 0x000102a7dce8 in _RINvNtCsehCoVkVrmPy_4core3ptr9drop_glueINtNtCs43qUkbPqFSt_5alloc3vec3VechEECs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100051ce8)
+	NEW_FUNC[2/2]: 0x000102df7e40 in _RNvMs1_NtNtCs4hz6FxguiQN_5rados4wire5codecNtB5_7Decoder5bytes+0x0 (r12_inconsistent:arm64+0x1003cbe40)
+	NEW_FUNC[1/7]: 0x0001038ef640 in _RINvMs0_NtCsbKJBXeLQRbx_10serde_json5errorNtB6_5Error12fix_positionNCNvMs3_NtB8_2deINtB1b_12DeserializerNtNtB8_4read9SliceReadE12fix_position0ECs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100ec3640)
+	NEW_FUNC[2/7]: 0x000102a713a0 in _RINvNtCsehCoVkVrmPy_4core3ptr9drop_glueINtNtCs43qUkbPqFSt_5alloc3vec3VecNtNtCsbKJBXeLQRbx_10serde_json5value5ValueEECs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x1000453a0)
+	NEW_FUNC[1/1]: 0x00010391bcb8 in _RINvNtCsbKJBXeLQRbx_10serde_json4read5errorNtB2_9SliceReadReEB4_+0x0 (r12_inconsistent:arm64+0x100eefcb8)
+	NEW_FUNC[1/1]: 0x00010391bac8 in _RINvNtCsbKJBXeLQRbx_10serde_json4read5errorNtB2_9SliceReadINtB2_9ReferenceShEEB4_+0x0 (r12_inconsistent:arm64+0x100eefac8)
+	NEW_FUNC[1/2]: 0x000102e0d7c4 in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE13parse_decimalCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x1003e17c4)
+	NEW_FUNC[2/2]: 0x000102e0e4dc in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE13parse_integerCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x1003e24dc)
+	NEW_FUNC[1/3]: 0x0001030a0dd0 in _RINvNtCsbKJBXeLQRbx_10serde_json4read12parse_escapeNtB2_9SliceReadEB4_+0x0 (r12_inconsistent:arm64+0x100674dd0)
+	NEW_FUNC[2/3]: 0x00010391c2e0 in _RINvNtCsbKJBXeLQRbx_10serde_json4read5errorNtB2_9SliceReaduEB4_+0x0 (r12_inconsistent:arm64+0x100ef02e0)
+	NEW_FUNC[1/2]: 0x0001039129b8 in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE5errorCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100ee69b8)
+	NEW_FUNC[2/2]: 0x0001030c7868 in _RNvXs5_NtCsbKJBXeLQRbx_10serde_json4readNtB5_9SliceReadNtB5_4Read8position+0x0 (r12_inconsistent:arm64+0x10069b868)
+	NEW_FUNC[1/1]: 0x000102df69b4 in _RNvMs1_NtNtCs4hz6FxguiQN_5rados4wire5codecNtB5_7Decoder3raw+0x0 (r12_inconsistent:arm64+0x1003ca9b4)
+	NEW_FUNC[1/1]: 0x000103911398 in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE18parse_long_integerCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100ee5398)
+	NEW_FUNC[1/1]: 0x00010391bea4 in _RINvNtCsbKJBXeLQRbx_10serde_json4read5errorNtB2_9SliceReadhEB4_+0x0 (r12_inconsistent:arm64+0x100eefea4)
+	NEW_FUNC[1/1]: 0x000103911bfc in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE22parse_decimal_overflowCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100ee5bfc)
+	NEW_FUNC[1/2]: 0x00010391a340 in _RINvNtCsbKJBXeLQRbx_10serde_json4read20parse_unicode_escapeNtB2_9SliceReadEB4_+0x0 (r12_inconsistent:arm64+0x100eee340)
+	NEW_FUNC[2/2]: 0x00010391c0c0 in _RINvNtCsbKJBXeLQRbx_10serde_json4read5errorNtB2_9SliceReadtEB4_+0x0 (r12_inconsistent:arm64+0x100ef00c0)
+	NEW_FUNC[1/1]: 0x000102e0f9ac in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE14parse_exponentCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x1003e39ac)
+	NEW_FUNC[1/1]: 0x0001039124a0 in _RNvMs3_NtCsbKJBXeLQRbx_10serde_json2deINtB5_12DeserializerNtNtB7_4read9SliceReadE23parse_exponent_overflowCs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x100ee64a0)
+	NEW_FUNC[1/1]: 0x000102a438ac in _RINvMs9_NtNtNtCs43qUkbPqFSt_5alloc11collections5btree4nodeINtB6_7NodeRefNtNtB6_6marker5OwnedNtNtBc_6string6StringNtNtCsbKJBXeLQRbx_10serde_json5value5ValueNtB1a_8InternalE17from_new_internalNtNtBc_5alloc6GlobalECs4hz6FxguiQN_5rados+0x0 (r12_inconsistent:arm64+0x1000178ac)
+###### Recommended dictionary. ######
+"\001\000" # Uses: 2652
+"\377\377\377\377" # Uses: 2634
+"\005\000\000\000\000\000\000\000" # Uses: 2433
+"\000\000\000\000\000\000\000\000" # Uses: 2469
+"\001\000\000\000\000\000\000\004" # Uses: 2483
+"\377\377" # Uses: 2533
+"\000\000" # Uses: 2749
+"\001\000\000\000\000\000\000\000" # Uses: 2527
+"\000\000\000\000\000\000\000\006" # Uses: 2450
+"\000\000\000\000\000\000\000\012" # Uses: 2493
+"$\000\000\000\000\000\000\000" # Uses: 2391
+"\270Q\000\001" # Uses: 2607
+"\377\377\377\377\377\377\377\377" # Uses: 2381
+"\001*" # Uses: 2532
+"\000\000\000\016" # Uses: 2539
+"\037\000\000\000\000\000\000\000" # Uses: 2394
+"5\001" # Uses: 2669
+"\377\377\377\377\377\377\377\035" # Uses: 2432
+"\010\000\000\000\000\000\000\000" # Uses: 2374
+"\000\000\000\000" # Uses: 2527
+"\0015" # Uses: 2613
+"\002\000\000\000\000\000\000\000" # Uses: 2194
+"\000\000\000\000\000\000\000\021" # Uses: 2394
+"\001\000\000\000" # Uses: 2606
+"\001\000\000\335" # Uses: 2495
+"\377\377_.\222\312\260\026" # Uses: 2317
+"\001\000\000\000\000\000\000+" # Uses: 2411
+"\015\000\000\000" # Uses: 2379
+"\001\000\000\000\000\000\000\020" # Uses: 2340
+"\377\377\377\377\377\377\377\002" # Uses: 2371
+"\001\004\000\000" # Uses: 2414
+"\000\000\000\005" # Uses: 2385
+"\377\377\377\377\377\377\377\001" # Uses: 2306
+"\010\000\000\000" # Uses: 2417
+"\012\000" # Uses: 2427
+"\000\000\000\000\000\000\000'" # Uses: 2244
+"\004\000\000\000" # Uses: 2364
+"\377\377\377\002" # Uses: 2388
+"\377\377\377\010" # Uses: 2390
+"6\001\000\000" # Uses: 2358
+"\001\011" # Uses: 2480
+"\231\231\231\231\231\231\231\031" # Uses: 2248
+"\001\000\000\014" # Uses: 2287
+"\014\000\000\000\000\000\000\000" # Uses: 2240
+"\376\377\377\377\377\377\377\377" # Uses: 2253
+"\374\377\377\377" # Uses: 2250
+"\006\000\000\000" # Uses: 2262
+"\377\377\0005" # Uses: 2293
+"\000\000\000\000\000\000\000\020" # Uses: 2144
+"\377\000" # Uses: 2301
+"\000\007" # Uses: 2311
+"\"\003\000\000" # Uses: 2166
+"\001\000\003#" # Uses: 2214
+"9\000\000\000" # Uses: 2209
+"\376\377\377\376" # Uses: 2172
+"N\000\000\000" # Uses: 2168
+"\377\377\377\376" # Uses: 2180
+"\000\000\000G" # Uses: 2182
+"\015\314\314\313" # Uses: 2112
+"\376\377\377\377" # Uses: 2051
+"\007\000\000\000\000\000\000\000" # Uses: 1968
+"\001\020" # Uses: 2086
+"Y\000\000\000" # Uses: 2036
+"\007\000\000\000" # Uses: 2022
+"\021\000\000\000\000\000\000\000" # Uses: 2006
+"\377\377\377\377\377\377\377\004" # Uses: 1918
+"\003\000\000\000" # Uses: 1925
+"\373\377\377\377" # Uses: 1920
+"\377\377\002!" # Uses: 1860
+"\000\000\000\022" # Uses: 1895
+"\021\000" # Uses: 1926
+"\376\377\377\375" # Uses: 1805
+"\371\377\377\377" # Uses: 1936
+"9\000\000\000\000\000\000\000" # Uses: 1721
+"\013\000\000\000\000\000\000\000" # Uses: 1717
+"\013\314\314\313" # Uses: 1798
+"\377\377\377\377\377\377\377\024" # Uses: 1730
+"\000\000\000\000\000\000\000\022" # Uses: 1683
+"\016\000\000\000" # Uses: 1667
+"\264\025\000\000" # Uses: 1731
+"z\000\000\000\000\000\000\000" # Uses: 1644
+"\000\000\000\001" # Uses: 1661
+";\000\000\000\000\000\000\000" # Uses: 1545
+"\011\000" # Uses: 1633
+"\001\006" # Uses: 1617
+"\377\377\377\356" # Uses: 1569
+"\001\000\000\010" # Uses: 1425
+"\313\314\314\014" # Uses: 1450
+"a\000\000\000\000\000\000\000" # Uses: 1342
+"\000\000\000\010" # Uses: 1455
+"\030\231\231\231\231\231\231\230" # Uses: 1359
+"\000\000\000\000\000\000\000\023" # Uses: 1315
+"6\001" # Uses: 1452
+"\224x\010\000" # Uses: 1405
+"\0005" # Uses: 1376
+"\372\377\377\377" # Uses: 1308
+"\001\000\000\005" # Uses: 1228
+"5\001\000\000" # Uses: 1180
+"\306\377\377\377" # Uses: 1130
+"\002\331\000\000" # Uses: 1148
+"2\000\000\000" # Uses: 1075
+"\377\377\377\377\377\377\377\007" # Uses: 957
+"\377\377\377\377\377\377\377!" # Uses: 873
+"\377\014\2201" # Uses: 779
+"\377\377\377\377\377\377\377R" # Uses: 776
+"\376\377\377\366" # Uses: 736
+"\002\000" # Uses: 657
+"\377\377\377\377\377\377\377\036" # Uses: 515
+"4\001\000\000" # Uses: 450
+"\376\377\377\303" # Uses: 427
+"\012\000\000\000" # Uses: 434
+"\001\003" # Uses: 432
+"\376\377\377\350" # Uses: 419
+"\312\314\314\014" # Uses: 334
+"3\000\000\000\000\000\000\000" # Uses: 262
+"\377\377\377\377\377\377\377\037" # Uses: 262
+"\304\377\377\377" # Uses: 242
+###### End of recommended dictionary. ######
+stat::number_of_executed_units: 2433975
+stat::average_exec_per_sec:     39901
+stat::new_units_added:          6754
+stat::slowest_unit_time_sec:    0
+stat::peak_rss_mb:              810

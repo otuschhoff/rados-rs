@@ -9,18 +9,26 @@ use crate::msgr::message::{Message, MessageHeader, MessageLengths};
 use crate::wire::{Decoder, Encoder, WireError};
 
 pub(crate) const MESSAGE_MON_MAP: u16 = 4;
+pub(crate) const MESSAGE_STATFS: u16 = 13;
+pub(crate) const MESSAGE_STATFS_REPLY: u16 = 14;
 pub(crate) const MESSAGE_MON_SUBSCRIBE: u16 = 15;
 pub(crate) const MESSAGE_MON_SUBSCRIBE_ACK: u16 = 16;
 pub(crate) const MESSAGE_OSD_MAP: u16 = 41;
 pub(crate) const MESSAGE_POOL_OPERATION_REPLY: u16 = 48;
 pub(crate) const MESSAGE_POOL_OPERATION: u16 = 49;
+pub(crate) const MESSAGE_MON_COMMAND: u16 = 50;
+pub(crate) const MESSAGE_MON_COMMAND_REPLY: u16 = 51;
+pub(crate) const MESSAGE_GET_POOL_STATS: u16 = 58;
+pub(crate) const MESSAGE_GET_POOL_STATS_REPLY: u16 = 59;
 pub(crate) const MESSAGE_MGR_MAP: u16 = 0x704;
 pub(crate) const SUBSCRIBE_ONCE: u8 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PoolOperation {
-    Create,
-    Delete,
+    CreatePool,
+    DeletePool,
+    CreateSnapshot,
+    DeleteSnapshot,
     CreateSelfManaged,
     DeleteSelfManaged,
 }
@@ -28,12 +36,39 @@ pub(crate) enum PoolOperation {
 impl PoolOperation {
     const fn code(self) -> u32 {
         match self {
-            Self::Create => 0x11,
-            Self::Delete => 0x12,
+            Self::CreatePool => 0x01,
+            Self::DeletePool => 0x02,
+            Self::CreateSnapshot => 0x11,
+            Self::DeleteSnapshot => 0x12,
             Self::CreateSelfManaged => 0x21,
             Self::DeleteSelfManaged => 0x22,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct StatFsReply {
+    pub(crate) fsid: Fsid,
+    pub(crate) version: u64,
+    pub(crate) kib: u64,
+    pub(crate) kib_used: u64,
+    pub(crate) kib_available: u64,
+    pub(crate) objects: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PoolStats {
+    pub(crate) bytes_used: u64,
+    pub(crate) objects: u64,
+    pub(crate) read_bytes: u64,
+    pub(crate) write_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PoolStatsReply {
+    pub(crate) fsid: Fsid,
+    pub(crate) version: u64,
+    pub(crate) pools: BTreeMap<String, PoolStats>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +77,15 @@ pub(crate) struct PoolOperationReply {
     pub(crate) result: i32,
     pub(crate) epoch: u32,
     pub(crate) response_data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CommandReply {
+    pub(crate) version: u64,
+    pub(crate) result: i32,
+    pub(crate) status: String,
+    pub(crate) command: Vec<String>,
+    pub(crate) data: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,7 +189,11 @@ pub(crate) fn encode_pool_operation(
     max_bytes: u32,
 ) -> Result<Message> {
     let valid = match operation {
-        PoolOperation::Create | PoolOperation::Delete => snapshot == 0 && !name.is_empty(),
+        PoolOperation::CreatePool => pool == 0 && snapshot == 0 && !name.is_empty(),
+        PoolOperation::DeletePool => pool != 0 && snapshot == 0 && name == "delete",
+        PoolOperation::CreateSnapshot | PoolOperation::DeleteSnapshot => {
+            snapshot == 0 && !name.is_empty()
+        }
         PoolOperation::CreateSelfManaged => snapshot == 0 && name.is_empty(),
         PoolOperation::DeleteSelfManaged => snapshot != 0 && name.is_empty(),
     };
@@ -165,6 +213,358 @@ pub(crate) fn encode_pool_operation(
     encoder.u8(0);
     encoder.i16(0);
     front_message(MESSAGE_POOL_OPERATION, 4, 2, encoder.finish()?)
+}
+
+pub(crate) fn encode_statfs(fsid: Fsid, have_version: u64, max_bytes: u32) -> Result<Message> {
+    if max_bytes == 0 {
+        return Err(WireError::LimitExceeded.into());
+    }
+    let mut encoder = Encoder::new(max_bytes as usize);
+    encoder.u64(have_version);
+    encoder.i16(-1);
+    encoder.u64(0);
+    encoder.raw(&fsid.0);
+    encoder.u8(0);
+    front_message(MESSAGE_STATFS, 2, 1, encoder.finish()?)
+}
+
+pub(crate) fn decode_statfs_reply(message: &Message, max_bytes: u32) -> Result<StatFsReply> {
+    validate_front_message(message, MESSAGE_STATFS_REPLY, max_bytes)?;
+    if message.header.version < 1 || message.header.compat_version > 1 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    let mut decoder = Decoder::new(&message.front, max_bytes as usize);
+    let fsid = decode_fsid(&mut decoder)?;
+    let version = decoder.u64();
+    let kib = decoder.u64();
+    let kib_used = decoder.u64();
+    let kib_available = decoder.u64();
+    let objects = decoder.u64();
+    finish_exact(&decoder, "statfs reply")?;
+    Ok(StatFsReply {
+        fsid,
+        version,
+        kib,
+        kib_used,
+        kib_available,
+        objects,
+    })
+}
+
+pub(crate) fn encode_get_pool_stats(
+    fsid: Fsid,
+    have_version: u64,
+    pools: &[String],
+    max_bytes: u32,
+) -> Result<Message> {
+    if max_bytes == 0 || pools.is_empty() {
+        return Err(WireError::LimitExceeded.into());
+    }
+    let count = u32::try_from(pools.len()).map_err(|_| WireError::LimitExceeded)?;
+    let mut encoder = Encoder::new(max_bytes as usize);
+    encoder.u64(have_version);
+    encoder.i16(-1);
+    encoder.u64(0);
+    encoder.raw(&fsid.0);
+    encoder.u32(count);
+    for pool in pools {
+        if pool.is_empty() {
+            return Err(WireError::Malformed.into());
+        }
+        encoder.string(pool);
+    }
+    front_message(MESSAGE_GET_POOL_STATS, 1, 0, encoder.finish()?)
+}
+
+pub(crate) fn decode_get_pool_stats_reply(
+    message: &Message,
+    max_bytes: u32,
+    max_pools: u32,
+    max_entries: u32,
+) -> Result<PoolStatsReply> {
+    if max_pools == 0 || max_entries == 0 {
+        return Err(WireError::LimitExceeded.into());
+    }
+    validate_front_message(message, MESSAGE_GET_POOL_STATS_REPLY, max_bytes)?;
+    if message.header.version == 0
+        || message.header.version > 2
+        || message.header.compat_version > 1
+    {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    let mut decoder = Decoder::new(&message.front, max_bytes as usize);
+    let version = decode_paxos_header(&mut decoder);
+    let fsid = decode_fsid(&mut decoder)?;
+    let count = decoder.u32();
+    if count > max_pools {
+        return Err(WireError::LimitExceeded.into());
+    }
+    let mut raw = BTreeMap::new();
+    for _ in 0..count {
+        let name = decoder.string();
+        if raw.contains_key(&name) {
+            return Err(MessageError::Malformed("duplicate pool stats entry"));
+        }
+        let stats = decode_pool_stats(&mut decoder, max_entries)?;
+        raw.insert(name, stats);
+    }
+    let per_pool = message.header.version >= 2 && decoder.bool();
+    finish_exact(&decoder, "get pool stats reply")?;
+
+    let mut pools = BTreeMap::new();
+    for (name, stats) in raw {
+        let values = [
+            stats.num_bytes,
+            stats.objects,
+            stats.read_kib,
+            stats.write_kib,
+            stats.hit_set_bytes,
+            stats.omap_bytes,
+            stats.allocated,
+            stats.omap_allocated,
+        ];
+        if values.iter().any(|value| *value < 0) {
+            return Err(MessageError::Malformed("negative pool stats field"));
+        }
+        let bytes_used = if per_pool {
+            add_u64_checked(&[
+                stats.allocated.cast_unsigned(),
+                stats.omap_allocated.cast_unsigned(),
+            ])?
+        } else {
+            add_u64_checked(&[
+                stats.num_bytes.cast_unsigned(),
+                stats.hit_set_bytes.cast_unsigned(),
+                stats.omap_bytes.cast_unsigned(),
+            ])?
+        };
+        let read_kib = stats.read_kib.cast_unsigned();
+        let write_kib = stats.write_kib.cast_unsigned();
+        if read_kib > (u64::MAX >> 10) || write_kib > (u64::MAX >> 10) {
+            return Err(WireError::LimitExceeded.into());
+        }
+        pools.insert(
+            name,
+            PoolStats {
+                bytes_used,
+                objects: stats.objects.cast_unsigned(),
+                read_bytes: read_kib << 10,
+                write_bytes: write_kib << 10,
+            },
+        );
+    }
+    Ok(PoolStatsReply {
+        fsid,
+        version,
+        pools,
+    })
+}
+
+pub(crate) fn encode_command(
+    fsid: Fsid,
+    command: &[String],
+    input: &[u8],
+    max_bytes: u32,
+) -> Result<Message> {
+    if max_bytes == 0 || input.len() > max_bytes as usize {
+        return Err(WireError::LimitExceeded.into());
+    }
+    let count = u32::try_from(command.len()).map_err(|_| WireError::LimitExceeded)?;
+    let mut encoder = Encoder::new(max_bytes as usize);
+    encoder.u64(0);
+    encoder.i16(-1);
+    encoder.u64(0);
+    encoder.raw(&fsid.0);
+    encoder.u32(count);
+    for value in command {
+        encoder.string(value);
+    }
+    let mut message = front_message(MESSAGE_MON_COMMAND, 1, 0, encoder.finish()?)?;
+    message.lengths.data = u32::try_from(input.len()).map_err(|_| WireError::LimitExceeded)?;
+    message.data = input.to_vec();
+    Ok(message)
+}
+
+pub(crate) fn decode_command_reply(
+    message: &Message,
+    max_bytes: u32,
+    max_command_items: u32,
+) -> Result<CommandReply> {
+    if max_command_items == 0 {
+        return Err(WireError::LimitExceeded.into());
+    }
+    validate_message_payload(message, MESSAGE_MON_COMMAND_REPLY, max_bytes)?;
+    let mut decoder = Decoder::new(&message.front, max_bytes as usize);
+    let version = decoder.u64();
+    decoder.i16();
+    decoder.u64();
+    let result = decoder.i32();
+    let status = decoder.string();
+    let count = decoder.u32();
+    decoder.finish()?;
+    if count > max_command_items || u64::from(count) > decoder.remaining() as u64 / 4 {
+        return Err(WireError::LimitExceeded.into());
+    }
+    let mut command = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        command.push(decoder.string());
+    }
+    finish_exact(&decoder, "monitor command acknowledgement")?;
+    Ok(CommandReply {
+        version,
+        result,
+        status,
+        command,
+        data: message.data.clone(),
+    })
+}
+
+fn decode_paxos_header(decoder: &mut Decoder<'_>) -> u64 {
+    let version = decoder.u64();
+    decoder.i16();
+    decoder.u64();
+    version
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RawPoolStats {
+    num_bytes: i64,
+    objects: i64,
+    read_kib: i64,
+    write_kib: i64,
+    hit_set_bytes: i64,
+    omap_bytes: i64,
+    allocated: i64,
+    omap_allocated: i64,
+}
+
+fn decode_pool_stats(decoder: &mut Decoder<'_>, max_entries: u32) -> Result<RawPoolStats> {
+    let mut result = RawPoolStats {
+        num_bytes: 0,
+        objects: 0,
+        read_kib: 0,
+        write_kib: 0,
+        hit_set_bytes: 0,
+        omap_bytes: 0,
+        allocated: 0,
+        omap_allocated: 0,
+    };
+
+    let (version, mut payload) = decoder.versioned(7);
+    if let Err(error) = decoder.finish() {
+        return Err(error.into());
+    }
+    if version != 7 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+
+    let (collection_version, mut collection) = payload.versioned(2);
+    if let Err(error) = payload.finish() {
+        return Err(error.into());
+    }
+    if collection_version != 2 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+
+    let (sum_version, mut sum) = collection.versioned(20);
+    if let Err(error) = collection.finish() {
+        return Err(error.into());
+    }
+    if sum_version != 20 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    for index in 0..40 {
+        let value = if (28..=31).contains(&index) {
+            i64::from(sum.i32())
+        } else {
+            sum.i64()
+        };
+        match index {
+            0 => result.num_bytes = value,
+            1 => result.objects = value,
+            8 => result.read_kib = value,
+            10 => result.write_kib = value,
+            22 => result.hit_set_bytes = value,
+            37 => result.omap_bytes = value,
+            _ => {}
+        }
+    }
+    if sum.finish().is_err() || sum.remaining() != 0 {
+        return Err(MessageError::Malformed("pool stats sum"));
+    }
+
+    let categories = collection.u32();
+    if categories > max_entries {
+        return Err(WireError::LimitExceeded.into());
+    }
+    for _ in 0..categories {
+        let _ = collection.string();
+        skip_object_stat_sum(&mut collection)?;
+    }
+    if collection.finish().is_err() || collection.remaining() != 0 {
+        return Err(MessageError::Malformed("pool stats categories"));
+    }
+
+    payload.i64();
+    payload.i64();
+    payload.i32();
+    payload.i32();
+
+    let (store_version, mut store) = payload.versioned(1);
+    if let Err(error) = payload.finish() {
+        return Err(error.into());
+    }
+    if store_version != 1 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    store.u64();
+    store.u64();
+    store.u64();
+    result.allocated = store.i64();
+    store.i64();
+    store.i64();
+    store.i64();
+    store.i64();
+    result.omap_allocated = store.i64();
+    store.i64();
+    if store.finish().is_err() || store.remaining() != 0 {
+        return Err(MessageError::Malformed("pool stats store"));
+    }
+
+    payload.i32();
+    if payload.finish().is_err() || payload.remaining() != 0 {
+        return Err(MessageError::Malformed("pool stats payload"));
+    }
+    Ok(result)
+}
+
+fn skip_object_stat_sum(decoder: &mut Decoder<'_>) -> Result<()> {
+    let (version, mut payload) = decoder.versioned(20);
+    if let Err(error) = decoder.finish() {
+        return Err(error.into());
+    }
+    if version != 20 {
+        return Err(MessageError::UnsupportedVersion);
+    }
+    for index in 0..40 {
+        if (28..=31).contains(&index) {
+            payload.i32();
+        } else {
+            payload.i64();
+        }
+    }
+    if payload.finish().is_err() || payload.remaining() != 0 {
+        return Err(MessageError::Malformed("object stat sum"));
+    }
+    Ok(())
+}
+
+fn add_u64_checked(values: &[u64]) -> Result<u64> {
+    let mut result = 0_u64;
+    for value in values {
+        result = result.checked_add(*value).ok_or(WireError::LimitExceeded)?;
+    }
+    Ok(result)
 }
 
 pub(crate) fn decode_pool_operation_reply(
@@ -378,6 +778,31 @@ fn validate_front_message(message: &Message, message_type: u16, max_bytes: u32) 
     Ok(())
 }
 
+fn validate_message_payload(message: &Message, message_type: u16, max_bytes: u32) -> Result<()> {
+    if max_bytes == 0
+        || message.front.len() > max_bytes as usize
+        || message.data.len() > max_bytes as usize
+    {
+        return Err(WireError::LimitExceeded.into());
+    }
+    if message.header.message_type != message_type {
+        return Err(MessageError::Malformed("message type"));
+    }
+    let front = u32::try_from(message.front.len()).map_err(|_| WireError::LimitExceeded)?;
+    let data = u32::try_from(message.data.len()).map_err(|_| WireError::LimitExceeded)?;
+    if !message.middle.is_empty()
+        || message.lengths
+            != (MessageLengths {
+                front,
+                data,
+                ..MessageLengths::default()
+            })
+    {
+        return Err(MessageError::Malformed("segment lengths"));
+    }
+    Ok(())
+}
+
 fn finish_exact(decoder: &Decoder<'_>, name: &'static str) -> Result<()> {
     decoder.finish()?;
     if decoder.remaining() != 0 {
@@ -478,9 +903,16 @@ mod tests {
 
     #[test]
     fn pool_snapshot_operations_match_frozen_layout_and_validate_unions() {
-        let request =
-            encode_pool_operation(Fsid([1; 16]), 7, 3, PoolOperation::Create, 0, "snap", 1024)
-                .expect("pool operation");
+        let request = encode_pool_operation(
+            Fsid([1; 16]),
+            7,
+            3,
+            PoolOperation::CreateSnapshot,
+            0,
+            "snap",
+            1024,
+        )
+        .expect("pool operation");
         assert_eq!(request.header.message_type, MESSAGE_POOL_OPERATION);
         assert_eq!(
             (request.header.version, request.header.compat_version),
@@ -501,8 +933,16 @@ mod tests {
         assert_eq!(decoder.remaining(), 0);
 
         assert!(
-            encode_pool_operation(Fsid([1; 16]), 7, 3, PoolOperation::Create, 1, "snap", 1024,)
-                .is_err()
+            encode_pool_operation(
+                Fsid([1; 16]),
+                7,
+                3,
+                PoolOperation::CreateSnapshot,
+                1,
+                "snap",
+                1024,
+            )
+            .is_err()
         );
         assert!(
             encode_pool_operation(
@@ -515,6 +955,54 @@ mod tests {
                 1024,
             )
             .is_err()
+        );
+
+        let create_pool = encode_pool_operation(
+            Fsid([1; 16]),
+            9,
+            0,
+            PoolOperation::CreatePool,
+            0,
+            "newpool",
+            1024,
+        )
+        .expect("create pool");
+        let mut create_decoder = Decoder::new(&create_pool.front, 1024);
+        assert_eq!(create_decoder.u64(), 9);
+        assert_eq!(create_decoder.i16(), -1);
+        assert_eq!(create_decoder.u64(), 0);
+        assert_eq!(create_decoder.raw(16), &[1; 16]);
+        assert_eq!(create_decoder.u32(), 0);
+        assert_eq!(create_decoder.u32(), 0x01);
+
+        let delete_pool = encode_pool_operation(
+            Fsid([1; 16]),
+            9,
+            3,
+            PoolOperation::DeletePool,
+            0,
+            "delete",
+            1024,
+        )
+        .expect("delete pool");
+        let mut delete_decoder = Decoder::new(&delete_pool.front, 1024);
+        delete_decoder.u64();
+        delete_decoder.i16();
+        delete_decoder.u64();
+        delete_decoder.raw(16);
+        assert_eq!(delete_decoder.u32(), 3);
+        assert_eq!(delete_decoder.u32(), 0x02);
+        delete_decoder.u64();
+        delete_decoder.u64();
+        assert_eq!(delete_decoder.string(), "delete");
+
+        assert!(
+            encode_pool_operation(Fsid([1; 16]), 9, 1, PoolOperation::DeletePool, 0, "x", 1024)
+                .is_err()
+        );
+        assert!(
+            encode_pool_operation(Fsid([1; 16]), 9, 1, PoolOperation::CreatePool, 0, "", 1024,)
+                .is_err()
         );
     }
 
@@ -547,6 +1035,273 @@ mod tests {
         );
         assert!(decode_allocated_snapshot_id(&[0; 8], 8).is_err());
         assert!(decode_allocated_snapshot_id(&[1; 9], 9).is_err());
+    }
+
+    #[test]
+    fn monitor_command_codecs_match_frozen_layout_and_bounds() {
+        let command = vec![r#"{"prefix":"status"}"#.to_owned()];
+        let request = encode_command(Fsid([3; 16]), &command, b"input", 128).expect("command");
+        assert_eq!(request.header.message_type, MESSAGE_MON_COMMAND);
+        assert_eq!(
+            (request.header.version, request.header.compat_version),
+            (1, 0)
+        );
+        assert_eq!(request.data, b"input");
+        let mut decoder = Decoder::new(&request.front, 128);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.i16(), -1);
+        assert_eq!(decoder.u64(), 0);
+        assert_eq!(decoder.raw(16), &[3; 16]);
+        assert_eq!(decoder.u32(), 1);
+        assert_eq!(decoder.string(), command[0]);
+        assert_eq!(decoder.remaining(), 0);
+
+        let mut encoder = Encoder::new(128);
+        encoder.u64(7);
+        encoder.i16(-1);
+        encoder.u64(0);
+        encoder.i32(-2);
+        encoder.string("missing");
+        encoder.u32(1);
+        encoder.string(&command[0]);
+        let mut reply = message(
+            MESSAGE_MON_COMMAND_REPLY,
+            1,
+            0,
+            encoder.finish().expect("reply"),
+        );
+        reply.data = b"details".to_vec();
+        reply.lengths.data = 7;
+        let command_reply = decode_command_reply(&reply, 128, 1).expect("decode reply");
+        assert_eq!(command_reply.version, 7);
+        assert_eq!(command_reply.result, -2);
+        assert_eq!(command_reply.status, "missing");
+        assert_eq!(command_reply.command, command);
+        assert_eq!(command_reply.data, b"details");
+
+        assert!(encode_command(Fsid([0; 16]), &[], &[0; 129], 128).is_err());
+        assert_eq!(
+            decode_command_reply(&reply, 128, 0),
+            Err(MessageError::Wire(WireError::LimitExceeded))
+        );
+        reply.lengths.data = 6;
+        assert_eq!(
+            decode_command_reply(&reply, 128, 1),
+            Err(MessageError::Malformed("segment lengths"))
+        );
+    }
+
+    fn encode_test_pool_stats_entry(front: &mut Encoder, name: &str) {
+        front.string(name);
+        front.versioned(7, 5, |pool| {
+            pool.versioned(2, 2, |collection| {
+                collection.versioned(20, 14, |sum| {
+                    for index in 0..40 {
+                        let value = match index {
+                            0 => 100_u64,
+                            1 => 3,
+                            8 => 5,
+                            10 => 7,
+                            22 => 11,
+                            37 => 13,
+                            _ => 0,
+                        };
+                        if (28..=31).contains(&index) {
+                            sum.i32(i32::try_from(value).expect("test value"));
+                        } else {
+                            sum.u64(value);
+                        }
+                    }
+                });
+                collection.u32(0);
+            });
+            pool.i64(0);
+            pool.i64(0);
+            pool.i32(0);
+            pool.i32(0);
+            pool.versioned(1, 1, |store| {
+                for index in 0..10 {
+                    let value = match index {
+                        3 => 200_u64,
+                        8 => 17,
+                        _ => 0,
+                    };
+                    store.u64(value);
+                }
+            });
+            pool.i32(1);
+        });
+    }
+
+    fn encode_test_pool_stats(front: &mut Encoder, per_pool: bool) {
+        front.u64(9);
+        front.i16(-1);
+        front.u64(0);
+        front.raw(&[1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        front.u32(1);
+        encode_test_pool_stats_entry(front, "data");
+        front.bool(per_pool);
+    }
+
+    #[test]
+    fn statfs_and_pool_stats_codecs_match_frozen_layout_and_bounds() {
+        let statfs = encode_statfs(Fsid([4; 16]), 42, 128).expect("statfs");
+        assert_eq!(statfs.header.message_type, MESSAGE_STATFS);
+        assert_eq!(
+            (statfs.header.version, statfs.header.compat_version),
+            (2, 1)
+        );
+        let mut request = Decoder::new(&statfs.front, 128);
+        assert_eq!(request.u64(), 42);
+        assert_eq!(request.i16(), -1);
+        assert_eq!(request.u64(), 0);
+        assert_eq!(request.raw(16), &[4; 16]);
+        assert_eq!(request.u8(), 0);
+        assert_eq!(request.remaining(), 0);
+
+        let mut statfs_reply = Encoder::new(128);
+        statfs_reply.raw(&[4; 16]);
+        statfs_reply.u64(43);
+        statfs_reply.u64(100);
+        statfs_reply.u64(40);
+        statfs_reply.u64(60);
+        statfs_reply.u64(7);
+        let decoded = decode_statfs_reply(
+            &message(
+                MESSAGE_STATFS_REPLY,
+                1,
+                1,
+                statfs_reply.finish().expect("statfs reply"),
+            ),
+            128,
+        )
+        .expect("decode statfs");
+        assert_eq!(decoded.version, 43);
+        assert_eq!(decoded.kib, 100);
+        assert_eq!(decoded.kib_used, 40);
+        assert_eq!(decoded.kib_available, 60);
+        assert_eq!(decoded.objects, 7);
+
+        let get = encode_get_pool_stats(Fsid([5; 16]), 11, &["data".to_owned()], 256)
+            .expect("get pool stats");
+        assert_eq!(get.header.message_type, MESSAGE_GET_POOL_STATS);
+        let mut get_decoder = Decoder::new(&get.front, 256);
+        assert_eq!(get_decoder.u64(), 11);
+        assert_eq!(get_decoder.i16(), -1);
+        assert_eq!(get_decoder.u64(), 0);
+        assert_eq!(get_decoder.raw(16), &[5; 16]);
+        assert_eq!(get_decoder.u32(), 1);
+        assert_eq!(get_decoder.string(), "data");
+
+        let mut front = Encoder::new(16 << 10);
+        encode_test_pool_stats(&mut front, true);
+        let reply = decode_get_pool_stats_reply(
+            &message(
+                MESSAGE_GET_POOL_STATS_REPLY,
+                2,
+                1,
+                front.finish().expect("pool stats reply"),
+            ),
+            16 << 10,
+            4,
+            4,
+        )
+        .expect("decode pool stats");
+        let pool_stats = reply.pools["data"];
+        assert_eq!(reply.version, 9);
+        assert_eq!(pool_stats.bytes_used, 217);
+        assert_eq!(pool_stats.objects, 3);
+        assert_eq!(pool_stats.read_bytes, 5 << 10);
+        assert_eq!(pool_stats.write_bytes, 7 << 10);
+
+        assert!(encode_get_pool_stats(Fsid([0; 16]), 0, &[], 128).is_err());
+        assert!(encode_get_pool_stats(Fsid([0; 16]), 0, &[String::new()], 128).is_err());
+    }
+
+    #[test]
+    fn pool_stats_decoder_rejects_malformed_negative_and_overflow() {
+        let mut negative = Encoder::new(16 << 10);
+        encode_test_pool_stats(&mut negative, false);
+        let mut negative_message = message(
+            MESSAGE_GET_POOL_STATS_REPLY,
+            2,
+            1,
+            negative.finish().expect("negative payload"),
+        );
+        let pos = negative_message
+            .front
+            .windows(8)
+            .position(|window| window == 100_u64.to_le_bytes())
+            .expect("locate num_bytes field");
+        negative_message.front[pos..pos + 8].copy_from_slice(&(-1_i64).to_le_bytes());
+        assert_eq!(
+            decode_get_pool_stats_reply(&negative_message, 16 << 10, 4, 4),
+            Err(MessageError::Malformed("negative pool stats field"))
+        );
+
+        let mut duplicate = Encoder::new(16 << 10);
+        duplicate.u64(9);
+        duplicate.i16(-1);
+        duplicate.u64(0);
+        duplicate.raw(&[1; 16]);
+        duplicate.u32(2);
+        encode_test_pool_stats_entry(&mut duplicate, "data");
+        encode_test_pool_stats_entry(&mut duplicate, "data");
+        duplicate.bool(false);
+        let duplicate_message = message(
+            MESSAGE_GET_POOL_STATS_REPLY,
+            2,
+            1,
+            duplicate.finish().expect("duplicate payload"),
+        );
+        assert_eq!(
+            decode_get_pool_stats_reply(&duplicate_message, 16 << 10, 4, 4),
+            Err(MessageError::Malformed("duplicate pool stats entry"))
+        );
+
+        let mut overflow = Encoder::new(16 << 10);
+        overflow.u64(9);
+        overflow.i16(-1);
+        overflow.u64(0);
+        overflow.raw(&[1; 16]);
+        overflow.u32(1);
+        overflow.string("data");
+        overflow.versioned(7, 5, |pool| {
+            pool.versioned(2, 2, |collection| {
+                collection.versioned(20, 14, |sum| {
+                    for index in 0..40 {
+                        let value = if index == 8 { i64::MAX as u64 } else { 0 };
+                        if (28..=31).contains(&index) {
+                            sum.i32(i32::try_from(value).unwrap_or_default());
+                        } else {
+                            sum.u64(value);
+                        }
+                    }
+                });
+                collection.u32(0);
+            });
+            pool.i64(0);
+            pool.i64(0);
+            pool.i32(0);
+            pool.i32(0);
+            pool.versioned(1, 1, |store| {
+                for _ in 0..10 {
+                    store.u64(0);
+                }
+            });
+            pool.i32(1);
+        });
+        overflow.bool(false);
+        let overflow_message = message(
+            MESSAGE_GET_POOL_STATS_REPLY,
+            2,
+            1,
+            overflow.finish().expect("overflow payload"),
+        );
+        assert_eq!(
+            decode_get_pool_stats_reply(&overflow_message, 16 << 10, 4, 4),
+            Err(MessageError::Wire(WireError::LimitExceeded))
+        );
     }
 
     #[test]

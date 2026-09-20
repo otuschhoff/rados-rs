@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09", "tools/r10", "tools/r11"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09", "tools/r10", "tools/r11", "tools/r12"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -33,6 +33,7 @@ include = [
     "!/src/r09_integration.rs",
     "!/src/r10_integration.rs",
     "!/src/r11_integration.rs",
+    "!/src/r12_integration.rs",
     "!/tools/r08/**",
     "!/integration/r08/**",
     "!/docs/r08/**",
@@ -45,6 +46,9 @@ include = [
     "!/tools/r11/**",
     "!/integration/r11/**",
     "!/docs/r11/**",
+    "!/tools/r12/**",
+    "!/integration/r12/**",
+    "!/docs/r12/**",
     "/examples/**",
     "/docs/RUST_PORT_SPEC.md",
     "/docs/decisions/**",
@@ -88,14 +92,15 @@ include = [
 name = "rados"
 
 [features]
-r04-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
-r05-integration = ["dep:serde", "dep:serde_json", "tokio/net", "tokio/rt-multi-thread"]
+r04-integration = ["dep:serde", "tokio/net", "tokio/rt-multi-thread"]
+r05-integration = ["dep:serde", "tokio/net", "tokio/rt-multi-thread"]
 r06-integration = []
-r07-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
-r08-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
-r09-integration = ["dep:serde", "dep:serde_json", "tokio/rt-multi-thread"]
+r07-integration = ["dep:serde", "tokio/rt-multi-thread"]
+r08-integration = ["dep:serde", "tokio/rt-multi-thread"]
+r09-integration = ["dep:serde", "tokio/rt-multi-thread"]
 r10-integration = []
 r11-integration = []
+r12-integration = []
 
 [[bin]]
 name = "rados-r04-live"
@@ -118,7 +123,7 @@ hickory-resolver = { version = "=0.26.3", default-features = false, features = [
 hmac = "=0.13.0"
 sha2 = "=0.11.0"
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"], optional = true }
-serde_json = { version = "=1.0.151", default-features = false, features = ["std"], optional = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
