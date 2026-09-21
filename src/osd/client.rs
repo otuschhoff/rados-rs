@@ -34,10 +34,10 @@ use super::messages::{
 use super::watch::{MESSAGE_WATCH_NOTIFY, Notification, decode_notification};
 
 const ENTITY_OSD: u8 = 4;
-const MAX_ATTEMPTS: usize = 3;
+const MAX_ATTEMPTS: usize = 4;
 const MAX_RETIRED_SESSIONS: usize = 16;
 const CANCELLATION_POLL: Duration = Duration::from_millis(10);
-const TRANSIENT_REFRESH_WAIT: Duration = Duration::from_millis(250);
+const TRANSIENT_REFRESH_WAIT: Duration = Duration::from_secs(2);
 const READ_REPLY_FRONT_BYTES: u64 = 144;
 const MAX_MUTATIONS: usize = 64;
 const MAX_MUTATION_BYTES: u64 = 64 * 32 * 1024 * 1024;
@@ -122,6 +122,7 @@ pub(crate) enum UnknownCause {
 pub(crate) enum Error {
     Closed,
     NotConnected,
+    StaleMap,
     NoPrimary,
     LimitExceeded,
     MalformedReply,
@@ -1422,7 +1423,11 @@ impl OSDSession {
             };
             request.cancel_on_drop();
             drop(state);
-            return wait_for_request(&mut request, options, mutation).await;
+            let result = wait_for_request(&mut request, options, mutation).await;
+            if result.is_err() && self.state.lock().await.failure == Some(Error::StaleMap) {
+                return Err(Error::StaleMap);
+            }
+            return result;
         }
     }
 
@@ -1455,7 +1460,11 @@ impl OSDSession {
         };
         request.cancel_on_drop();
         drop(state);
-        wait_for_request(&mut request, options, false).await
+        let result = wait_for_request(&mut request, options, false).await;
+        if result.is_err() && self.state.lock().await.failure == Some(Error::StaleMap) {
+            return Err(Error::StaleMap);
+        }
+        result
     }
 
     fn close(&self) {
@@ -1514,7 +1523,7 @@ async fn run_incoming(
 ) {
     while let Some(message) = raw.next_incoming().await {
         if message.header.message_type == 41 {
-            fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
+            fail_session(&raw, &state, &changed, &notifications, Error::StaleMap).await;
             return;
         }
         if message.header.message_type == MESSAGE_WATCH_NOTIFY {
@@ -3085,6 +3094,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn osd_map_notification_preserves_stale_map_for_pending_mutation() {
+        let (client, mut server) = duplex(8192);
+        let session = OSDSession::spawn(
+            raw_session(client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        let pending_session = Arc::clone(&session);
+        let pending = tokio::spawn(async move {
+            pending_session
+                .submit(
+                    backoff(BACKOFF_BLOCK).pg,
+                    &object(),
+                    request_message(),
+                    true,
+                    &OperationOptions::new()
+                        .with_deadline(std::time::Instant::now() + Duration::from_secs(1)),
+                )
+                .await
+        });
+        let _request = next_message(&mut server).await;
+        let map = Message {
+            header: MessageHeader {
+                sequence: 1,
+                message_type: 41,
+                ..MessageHeader::default()
+            },
+            ..Message::default()
+        };
+        send_message(&mut server, map).await;
+
+        assert_eq!(pending.await.expect("submit task"), Err(Error::StaleMap));
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn flush_captures_watermark_and_waits_for_all_prior_mutations() {
         let client = Client::new(
             Arc::new(RwLock::new(None)),
@@ -3469,7 +3515,7 @@ mod tests {
         install_session(&client, &authority, osd, &addresses, Arc::clone(&session));
 
         let options = OperationOptions::new()
-            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(3));
         let monitor_for_call = Arc::clone(&monitor);
         let command = tokio::spawn(async move {
             client
@@ -3614,7 +3660,7 @@ mod tests {
         );
 
         let options = OperationOptions::new()
-            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(3));
         let monitor_for_call = Arc::clone(&monitor);
         let op = tokio::spawn(async move {
             client

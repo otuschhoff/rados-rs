@@ -4187,11 +4187,12 @@ fn application_value(
 fn map_osd_error(error: ClientError, operation: &'static str) -> Error {
     let (kind, wire_errno) = match error {
         ClientError::Closed => (ErrorKind::Closed, None),
-        ClientError::NotConnected | ClientError::NoPrimary | ClientError::RecoveryExhausted => {
-            (ErrorKind::NotConnected, None)
-        }
+        ClientError::NotConnected
+        | ClientError::StaleMap
+        | ClientError::NoPrimary
+        | ClientError::RecoveryExhausted
+        | ClientError::MalformedReply => (ErrorKind::NotConnected, None),
         ClientError::LimitExceeded => (ErrorKind::InvalidArgument, None),
-        ClientError::MalformedReply => (ErrorKind::NotConnected, None),
         ClientError::Unsupported => (ErrorKind::Unsupported, None),
         ClientError::Timeout => (ErrorKind::Timeout, None),
         ClientError::Cancelled => (ErrorKind::Canceled, None),

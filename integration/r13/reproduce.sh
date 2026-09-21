@@ -99,7 +99,7 @@ esac
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 temporary=$(mktemp -d)
 network="rados-r13-$$"
-report_temp="$root/integration/r13/.report.json.$$"
+report_temp="$temporary/report.json"
 final_report="$root/integration/r13/report.json"
 release_stage="$root/docs/r13/.release-artifacts.$$"
 

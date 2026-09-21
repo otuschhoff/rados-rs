@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use rados::{Client, Config, OperationOptions, SecretKey, SecurityMode};
+use rados::{Client, Config, ErrorKind, OperationOptions, SecretKey, SecurityMode};
 use rados_r13_tools::candidate::{INFLIGHT_MEASUREMENT_SENTINEL, RENEWAL_MEASUREMENT_SENTINEL};
 use serde::Serialize;
 
@@ -151,6 +151,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let max_samples = args.maximum_configured_sample_count.clamp(2, MAX_SAMPLES);
     samples.push(take_sample(started));
 
+    macro_rules! operation_with_reconnect {
+        ($pool:ident, $object:ident, $object_name:ident, $operation:expr) => {{
+            let mut recovery_attempts = 0_u8;
+            loop {
+                match $operation.await {
+                    Ok(value) => break value,
+                    Err(error)
+                        if error.kind() == ErrorKind::NotConnected && recovery_attempts < 4 =>
+                    {
+                        recovery_attempts += 1;
+                        let now = Instant::now();
+                        longest_connection =
+                            longest_connection.max(now.saturating_duration_since(connection_start));
+                        let _ = client.shutdown(op_options()).await;
+                        client = reconnect_until(&base_config, deadline).await?;
+                        connection_start = Instant::now();
+                        reconnects += 1;
+                        $pool = client.pool(args.pool.as_bytes())?;
+                        $object = $pool.object($object_name.as_bytes())?;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }};
+    }
+
     let mut iteration: u64 = 0;
     while Instant::now() < deadline {
         let now = Instant::now();
@@ -160,15 +186,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 longest_connection = elapsed_this_connection;
             }
             let _ = client.shutdown(op_options()).await;
-            client = connect(&base_config).await?;
+            client = reconnect_until(&base_config, deadline).await?;
             connection_start = Instant::now();
             reconnects += 1;
             next_reconnect = connection_start + args.reconnect_interval;
         }
 
-        let pool = client.pool(args.pool.as_bytes())?;
+        let mut pool = client.pool(args.pool.as_bytes())?;
         let object_name = format!("probe-{transport_static}-{iteration:016x}");
-        let object = pool.object(object_name.as_bytes())?;
+        let mut object = pool.object(object_name.as_bytes())?;
 
         // Best-effort cleanup of any stale prior artefact (independent
         // iteration state means it should not exist).
@@ -176,13 +202,21 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         // 1. write_full: replace the object contents with a per-iteration payload.
         let payload = build_payload(iteration);
-        object.write_full(&payload, op_options()).await?;
+        operation_with_reconnect!(
+            pool,
+            object,
+            object_name,
+            object.write_full(&payload, op_options())
+        );
         writes += 1;
 
         // 2. read: verify byte-exact contents.
-        let (read_bytes, _info) = object
-            .read(0, u64::try_from(payload.len())?, op_options())
-            .await?;
+        let (read_bytes, _info) = operation_with_reconnect!(
+            pool,
+            object,
+            object_name,
+            object.read(0, u64::try_from(payload.len())?, op_options())
+        );
         reads += 1;
         if read_bytes != payload {
             return Err(format!(
@@ -192,7 +226,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // 3. stat: capture the size after the write_full.
-        let info_before_append = object.stat(op_options()).await?;
+        let info_before_append =
+            operation_with_reconnect!(pool, object, object_name, object.stat(op_options()));
         stats += 1;
         if info_before_append.size != payload.len() as u64 {
             return Err(format!(
@@ -202,16 +237,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // 4. append: extend the object by a fixed marker.
-        object.append(APPEND_TAG, op_options()).await?;
+        operation_with_reconnect!(
+            pool,
+            object,
+            object_name,
+            object.append(APPEND_TAG, op_options())
+        );
         appends += 1;
 
         // 5. append-once verification: reading back must observe the
         // marker exactly once at the tail. This detects any duplicated
         // mutation across reconnects.
         let expected_len = payload.len() + APPEND_TAG.len();
-        let (verify_bytes, _info) = object
-            .read(0, u64::try_from(expected_len)?, op_options())
-            .await?;
+        let (verify_bytes, _info) = operation_with_reconnect!(
+            pool,
+            object,
+            object_name,
+            object.read(0, u64::try_from(expected_len)?, op_options())
+        );
         if verify_bytes.len() != expected_len
             || &verify_bytes[..payload.len()] != payload.as_slice()
             || &verify_bytes[payload.len()..] != APPEND_TAG
@@ -221,15 +264,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         append_once_verifications += 1;
 
         // 6. remove: complete the iteration.
-        object.remove(op_options()).await?;
+        operation_with_reconnect!(pool, object, object_name, object.remove(op_options()));
         removes += 1;
 
         iteration += 1;
 
         let now = Instant::now();
-        if now >= next_sample
-            && u64::try_from(samples.len()).unwrap_or(u64::MAX) < max_samples
-        {
+        if now >= next_sample && u64::try_from(samples.len()).unwrap_or(u64::MAX) < max_samples {
             samples.push(take_sample(started));
             next_sample = now + args.sample_interval;
         }
@@ -241,7 +282,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         longest_connection = final_connection;
     }
 
-    let elapsed = Instant::now().saturating_duration_since(started);
     // Emit a final sample so the harness observes end-of-run resource state.
     if u64::try_from(samples.len()).unwrap_or(u64::MAX) < max_samples {
         let last_elapsed = samples.last().map_or(0, |s| s.elapsed_ns);
@@ -254,6 +294,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if samples.len() < 2 {
         return Err("probe collected fewer than two resource samples".into());
     }
+    let elapsed = Instant::now().saturating_duration_since(started);
+    let elapsed_ns = nanos(elapsed)
+        .max(samples.last().map_or(0, |sample| sample.elapsed_ns))
+        .max(1);
 
     let operations = writes;
     if reads != operations
@@ -276,7 +320,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let report = ProbeReport {
         transport: transport_static,
         requested_duration_ns: nanos(args.duration),
-        elapsed_ns: nanos(elapsed).max(1),
+        elapsed_ns,
         monotonic_duration_satisfied: elapsed >= args.duration,
         operations,
         writes,
@@ -312,6 +356,22 @@ async fn connect(config: &Config) -> Result<Client, Box<dyn std::error::Error>> 
         .connect(OperationOptions::new().with_timeout(Duration::from_secs(30))?)
         .await?;
     Ok(client)
+}
+
+async fn reconnect_until(
+    config: &Config,
+    deadline: Instant,
+) -> Result<Client, Box<dyn std::error::Error>> {
+    loop {
+        match connect(config).await {
+            Ok(client) => return Ok(client),
+            Err(error) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                drop(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn op_options() -> OperationOptions {
@@ -405,7 +465,10 @@ fn parse_args() -> Result<ProbeArgs, Box<dyn std::error::Error>> {
                 )?)?));
             }
             "--reconnect-interval" => {
-                reconnect = Some(parse_duration(&next_value(&mut args, "--reconnect-interval")?)?);
+                reconnect = Some(parse_duration(&next_value(
+                    &mut args,
+                    "--reconnect-interval",
+                )?)?);
             }
             "--reconnect-interval-ns" => {
                 reconnect = Some(Duration::from_nanos(parse_u64(&next_value(
@@ -414,7 +477,10 @@ fn parse_args() -> Result<ProbeArgs, Box<dyn std::error::Error>> {
                 )?)?));
             }
             "--sample-interval" => {
-                sample = Some(parse_duration(&next_value(&mut args, "--sample-interval")?)?);
+                sample = Some(parse_duration(&next_value(
+                    &mut args,
+                    "--sample-interval",
+                )?)?);
             }
             "--sample-interval-ns" => {
                 sample = Some(Duration::from_nanos(parse_u64(&next_value(
@@ -425,10 +491,8 @@ fn parse_args() -> Result<ProbeArgs, Box<dyn std::error::Error>> {
             "--key-file" => key_file = Some(PathBuf::from(next_value(&mut args, "--key-file")?)),
             "--output" => output = Some(PathBuf::from(next_value(&mut args, "--output")?)),
             "--maximum-configured-sample-count" => {
-                max_samples = parse_u64(&next_value(
-                    &mut args,
-                    "--maximum-configured-sample-count",
-                )?)?;
+                max_samples =
+                    parse_u64(&next_value(&mut args, "--maximum-configured-sample-count")?)?;
             }
             "-h" | "--help" => {
                 print_help();
@@ -450,8 +514,7 @@ fn parse_args() -> Result<ProbeArgs, Box<dyn std::error::Error>> {
     if reconnect_interval.is_zero() {
         return Err("--reconnect-interval must be non-zero".into());
     }
-    let sample_interval =
-        sample.ok_or("missing --sample-interval or --sample-interval-ns")?;
+    let sample_interval = sample.ok_or("missing --sample-interval or --sample-interval-ns")?;
     if sample_interval.is_zero() {
         return Err("--sample-interval must be non-zero".into());
     }
@@ -491,7 +554,8 @@ fn next_value(
     args: &mut std::iter::Skip<std::env::Args>,
     flag: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    args.next().ok_or_else(|| format!("{flag} requires a value").into())
+    args.next()
+        .ok_or_else(|| format!("{flag} requires a value").into())
 }
 
 fn parse_u64(value: &str) -> Result<u64, Box<dyn std::error::Error>> {
@@ -539,9 +603,7 @@ pub(crate) fn parse_duration(input: &str) -> Result<Duration, Box<dyn std::error
             "m" => Duration::from_secs(num.saturating_mul(60)),
             "h" => Duration::from_secs(num.saturating_mul(3600)),
             other => {
-                return Err(
-                    format!("unsupported duration unit {other:?} in {input:?}").into()
-                );
+                return Err(format!("unsupported duration unit {other:?} in {input:?}").into());
             }
         };
         total = total
