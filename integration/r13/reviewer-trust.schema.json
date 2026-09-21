@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "role", "reviewer_identity", "reviewer_affiliation", "public_key"],
+      "properties": {
+        "key_id": {"type": "string", "minLength": 1, "pattern": "^\\S+$"},
+        "role": {"enum": ["security", "distributed-systems", "license/notices", "release-owner"]},
+        "reviewer_identity": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        "reviewer_affiliation": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        "public_key": {"type": "string", "pattern": "^[A-Za-z0-9+/]{43}=$"}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "keys"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["pending", "active"]},
+    "keys": {"type": "array", "items": {"$ref": "#/$defs/key"}}
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "pending"}}, "required": ["status"]},
+    "then": {"properties": {"keys": {"type": "array", "maxItems": 0}}},
+    "else": {"properties": {"keys": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "allOf": [
+        {"contains": {"type": "object", "properties": {"role": {"const": "security"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"role": {"const": "distributed-systems"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"role": {"const": "license/notices"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "properties": {"role": {"const": "release-owner"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1}
+      ]
+    }}}
+  }]
+}

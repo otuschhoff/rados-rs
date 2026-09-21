@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["report", "qualification", "fuzz", "release"],
+      "properties": {
+        "report": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": {"const": "integration/r13/report.json"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "status", "sha256"],
+          "properties": {
+            "path": {"const": "docs/r13/qualification-report.json"},
+            "status": {"const": "passed"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "fuzz": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "status", "profile", "sha256"],
+          "properties": {
+            "path": {"const": "docs/r13/fuzz-report.json"},
+            "status": {"const": "passed"},
+            "profile": {"const": "certifying"},
+            "sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "artifacts"],
+          "properties": {
+            "version": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"},
+            "artifacts": {"type": "object", "minProperties": 4, "maxProperties": 4, "additionalProperties": {"$ref": "#/$defs/sha256"}}
+          }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "key_id", "reviewer_identity", "reviewer_affiliation", "started_at", "completed_at", "decision", "unresolved_findings", "approval_reference", "signature"],
+      "properties": {
+        "role": {"enum": ["security", "distributed-systems", "license/notices", "release-owner"]},
+        "key_id": {"type": "string", "minLength": 1, "pattern": "^\\S+$"},
+        "reviewer_identity": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        "reviewer_affiliation": {"type": "string", "minLength": 1, "pattern": ".*\\S.*"},
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"$ref": "#/$defs/timestamp"},
+        "decision": {"const": "approved"},
+        "unresolved_findings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["critical", "high", "medium", "low"],
+          "properties": {
+            "critical": {"const": 0},
+            "high": {"const": 0},
+            "medium": {"type": "integer", "minimum": 0},
+            "low": {"type": "integer", "minimum": 0}
+          }
+        },
+        "approval_reference": {"type": "string", "format": "uri", "pattern": "^https?://\\S+$"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "required_roles", "reviewed_candidate", "reviews"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"enum": ["pending", "approved"]},
+    "required_roles": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {"const": "security"},
+        {"const": "distributed-systems"},
+        {"const": "license/notices"},
+        {"const": "release-owner"}
+      ],
+      "items": false
+    },
+    "reviewed_candidate": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidate"}]},
+    "reviews": {"type": "array", "items": {"$ref": "#/$defs/review"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "pending"}}, "required": ["status"]},
+      "then": {
+        "properties": {
+          "reviewed_candidate": {"type": "null"},
+          "reviews": {"type": "array", "maxItems": 0}
+        }
+      },
+      "else": {
+        "properties": {
+          "reviewed_candidate": {"$ref": "#/$defs/candidate"},
+          "reviews": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/review"},
+            "allOf": [
+              {"contains": {"type": "object", "properties": {"role": {"const": "security"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+              {"contains": {"type": "object", "properties": {"role": {"const": "distributed-systems"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+              {"contains": {"type": "object", "properties": {"role": {"const": "license/notices"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1},
+              {"contains": {"type": "object", "properties": {"role": {"const": "release-owner"}}, "required": ["role"]}, "minContains": 1, "maxContains": 1}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

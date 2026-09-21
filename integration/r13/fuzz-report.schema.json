@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rados-rs/integration/r13/fuzz-report",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "target": {
+      "enum": [
+        "banner", "bounded_session_scripts", "cephx_auth_session_reply",
+        "cephx_authorizer", "cephx_credentials", "cephx_server_challenge",
+        "controls", "crc_frame", "entity_address", "entity_address_vector",
+        "messages", "primitive_decoder", "r05_config", "r05_monmap",
+        "r05_monmap_message", "r05_osdmap", "r05_osdmap_full_message",
+        "r05_osdmap_incremental", "r05_osdmap_incremental_message",
+        "r06_crush_decode", "r06_crush_place", "r06_object_mapping",
+        "r06_osdmap_place_object", "r07_osd_backoff", "r07_osd_reply",
+        "r08_mutation_recovery", "r08_mutation_reply", "r08_mutation_request",
+        "r09_compound", "r09_enumeration", "r09_metadata",
+        "r10_class", "r10_lock", "r10_watch",
+        "r11_snapshot", "r11_sparse", "r11_special",
+        "r12_command", "r12_inconsistent", "r12_stats",
+        "secure_frame", "versioned_envelope"
+      ]
+    },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target", "budget_seconds", "started_at", "finished_at",
+        "executions", "executions_per_second", "corpus_sha256",
+        "target_sha256", "output_path", "output_sha256", "status"
+      ],
+      "properties": {
+        "target": {"$ref": "#/$defs/target"},
+        "budget_seconds": {"type": "integer", "minimum": 1},
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "finished_at": {"$ref": "#/$defs/timestamp"},
+        "executions": {"type": "integer", "minimum": 0},
+        "executions_per_second": {"type": "integer", "minimum": 0},
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "target_sha256": {"$ref": "#/$defs/sha256"},
+        "output_path": {"type": "string", "pattern": "^fuzz-validation-logs/[A-Za-z0-9_]+\\.log$"},
+        "output_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"enum": ["passed", "failed", "interrupted"]}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "suite_id", "profile", "status",
+    "started_at", "finished_at", "source_sha256", "schema_sha256",
+    "platform", "toolchain", "campaigns"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite_id": {"const": "r13/fuzz-validation-v1"},
+    "profile": {"enum": ["pending", "smoke", "certifying"]},
+    "status": {"enum": ["pending", "passed", "failed", "interrupted"]},
+    "started_at": {"$ref": "#/$defs/timestamp"},
+    "finished_at": {"$ref": "#/$defs/timestamp"},
+    "source_sha256": {"$ref": "#/$defs/sha256"},
+    "schema_sha256": {"$ref": "#/$defs/sha256"},
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch"],
+      "properties": {
+        "os": {"enum": ["linux", "darwin"]},
+        "arch": {"enum": ["amd64", "arm64"]}
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nightly", "rustc", "cargo_fuzz"],
+      "properties": {
+        "nightly": {"const": "nightly-2026-09-01"},
+        "rustc": {"type": "string", "minLength": 1},
+        "cargo_fuzz": {"const": "cargo-fuzz 0.13.2"}
+      }
+    },
+    "campaigns": {"type": "array", "items": {"$ref": "#/$defs/campaign"}, "maxItems": 42}
+  }
+}

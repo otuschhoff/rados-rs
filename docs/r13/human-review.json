@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "status": "pending",
+  "required_roles": [
+    "security",
+    "distributed-systems",
+    "license/notices",
+    "release-owner"
+  ],
+  "reviewed_candidate": null,
+  "reviews": []
+}

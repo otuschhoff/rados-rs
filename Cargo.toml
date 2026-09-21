@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09", "tools/r10", "tools/r11", "tools/r12"]
+members = [".", "tools/r01", "tools/r02", "tools/r03", "tools/r04", "tools/r05", "tools/r06", "tools/r07", "tools/r08", "tools/r09", "tools/r10", "tools/r11", "tools/r12", "tools/r13"]
 exclude = ["fuzz"]
 default-members = ["."]
 resolver = "3"
@@ -49,6 +49,9 @@ include = [
     "!/tools/r12/**",
     "!/integration/r12/**",
     "!/docs/r12/**",
+    "!/tools/r13/**",
+    "!/integration/r13/**",
+    "!/docs/r13/**",
     "/examples/**",
     "/docs/RUST_PORT_SPEC.md",
     "/docs/decisions/**",

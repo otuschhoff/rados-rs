@@ -82,6 +82,44 @@ jobs:
         run: |
           cargo run --locked -p rados-r12-tools --bin rados-r12-verify -- . docs/r12/live-qualification-report.json
           cargo run --locked -p rados-r12-tools --bin rados-r12-verify-fuzz -- . docs/r12/fuzz-validation-report.json
+      - name: Verify checked-in R13 fuzz pending shape and inventory
+        run: |
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- --check-inventory --root .
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- --verify-shape --report docs/r13/fuzz-report.pending.json
+      - name: Verify R13 pending schemas, inventory, source digest, and doc constants (non-certifying)
+        # These checks are deliberately fast and NON-CERTIFYING. They exercise
+        # the R13 verifiers against the checked-in pending documents so drift
+        # in schemas, constants, or documentation is caught in CI. They do NOT
+        # produce a passed qualification, fuzz, candidate, or human-review
+        # report; those remain outstanding until executed by the certifying
+        # producers.
+        run: |
+          cargo run --locked -p rados-r13-tools --bin rados-r13-qualify -- --check-inventory --root .
+          cargo run --locked -p rados-r13-tools --bin rados-r13-qualify -- --print-checks | tee /tmp/r13-check-ids.txt
+          test "$(wc -l < /tmp/r13-check-ids.txt)" -eq 24
+          cargo run --locked -p rados-r13-tools --bin rados-r13-qualify -- --print-source-digest --root .
+          cargo run --locked -p rados-r13-tools --bin rados-r13-qualify -- --print-source-artifacts --root . >/dev/null
+          cargo run --locked -p rados-r13-tools --bin rados-r13-candidate -- --schema-digest --root .
+          cargo run --locked -p rados-r13-tools --bin rados-r13-candidate -- \
+            --verify-shape --report docs/r13/report.pending.json --allow-non-certifying
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- \
+            --verify --root . --report docs/r13/fuzz-report.pending.json \
+            --corpus-root /tmp --profile pending
+          cargo run --locked -p rados-r13-tools --bin rados-r13-verify -- --pending
+      - name: R13 deterministic release dry-run (non-certifying)
+        # Non-certifying dry-run of the deterministic release producer. Two
+        # runs are byte-compared; no release is authorized or published. The
+        # output directory is temporary and never committed.
+        run: |
+          mkdir -p /tmp/r13-release-a /tmp/r13-release-b
+          cargo run --locked -p rados-r13-tools --bin rados-r13-release -- \
+            --input . --output /tmp/r13-release-a --version v0.0.0-ci-dry-run
+          cargo run --locked -p rados-r13-tools --bin rados-r13-release -- \
+            --input . --output /tmp/r13-release-b --version v0.0.0-ci-dry-run
+          for artefact in /tmp/r13-release-a/*; do
+            cmp "$artefact" "/tmp/r13-release-b/$(basename "$artefact")"
+          done
+          test "$(find /tmp/r13-release-a -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 4
       - name: Install pinned audit tools
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
@@ -175,3 +213,14 @@ jobs:
           cargo +nightly-2026-09-01 fuzz run r12_command /tmp/rados-r12-corpus/r12_command -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r12_stats /tmp/rados-r12-corpus/r12_stats -- -max_total_time=10
           cargo +nightly-2026-09-01 fuzz run r12_inconsistent /tmp/rados-r12-corpus/r12_inconsistent -- -max_total_time=10
+      - name: Verify R13 fuzz inventory and pending shape
+        run: |
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- --check-inventory --root .
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- --verify-shape --report docs/r13/fuzz-report.pending.json
+          cargo run --locked -p rados-r13-tools --bin rados-r13-fuzz -- --verify --root . --report docs/r13/fuzz-report.pending.json --corpus-root /tmp --profile pending
+          integration/r13/prepare-fuzz-corpus.sh /tmp/rados-r13-corpus
+      - name: R13 fuzz smoke (sentinel targets only)
+        run: |
+          cargo +nightly-2026-09-01 fuzz run primitive_decoder /tmp/rados-r13-corpus/primitive_decoder -- -max_total_time=60
+          cargo +nightly-2026-09-01 fuzz run banner /tmp/rados-r13-corpus/banner -- -max_total_time=60
+          cargo +nightly-2026-09-01 fuzz run r12_command /tmp/rados-r13-corpus/r12_command -- -max_total_time=60

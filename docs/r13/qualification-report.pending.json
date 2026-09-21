@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "suite_id": "r13/automated-qualification-v1",
+  "status": "pending",
+  "note": "Placeholder: rados-r13-qualify will populate a strict `passed` report only after runtime evidence is captured. Verifier rejects this file on purpose."
+}

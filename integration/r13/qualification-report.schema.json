@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rados-rs/integration/r13/qualification-report",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "platform": {"enum": ["linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"]},
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "command_id", "command", "started_at", "finished_at",
+        "exit_code", "stdout_sha256", "stderr_sha256", "notes"
+      ],
+      "properties": {
+        "id": {"enum": [
+          "toolchain-msrv", "toolchain-stable", "features", "build", "test",
+          "clippy", "doc", "audit", "deny", "package", "example", "inventory",
+          "deterministic-release", "source-digest",
+          "prior-r03", "prior-r04", "prior-r05", "prior-r06", "prior-r07",
+          "prior-r08", "prior-r09", "prior-r10", "prior-r11", "prior-r12"
+        ]},
+        "command_id": {"type": "string", "minLength": 1, "pattern": "^\\S+$"},
+        "command": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "started_at": {"$ref": "#/$defs/timestamp"},
+        "finished_at": {"$ref": "#/$defs/timestamp"},
+        "exit_code": {"const": 0},
+        "stdout_sha256": {"$ref": "#/$defs/sha256"},
+        "stderr_sha256": {"$ref": "#/$defs/sha256"},
+        "notes": {"type": "string"}
+      }
+    },
+    "prior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "path", "sha256"],
+      "properties": {
+        "phase": {"enum": ["r03","r04","r05","r06","r07","r08","r09","r10","r11","r12"]},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "runtime_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "rustc", "cargo", "captured_at"],
+      "properties": {
+        "os": {"enum": ["linux", "darwin"]},
+        "arch": {"enum": ["amd64", "arm64"]},
+        "rustc": {"type": "string", "minLength": 1},
+        "cargo": {"type": "string", "minLength": 1},
+        "captured_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "suite_id", "status", "started_at", "finished_at",
+    "schema_sha256", "toolchain", "server", "runtime", "source", "inventory",
+    "priors", "checks", "release"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "suite_id": {"const": "r13/automated-qualification-v1"},
+    "status": {"const": "passed"},
+    "started_at": {"$ref": "#/$defs/timestamp"},
+    "finished_at": {"$ref": "#/$defs/timestamp"},
+    "schema_sha256": {"$ref": "#/$defs/sha256"},
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rust_msrv", "rust_stable_observed", "compiler_image", "cargo_audit", "cargo_deny", "cargo_fuzz"],
+      "properties": {
+        "rust_msrv": {"const": "1.98.0"},
+        "rust_stable_observed": {"const": "rustc 1.98.0 (88d9e12ae 2026-08-18)"},
+        "compiler_image": {"const": "rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922"},
+        "cargo_audit": {"const": "cargo-audit 0.22.2"},
+        "cargo_deny": {"const": "cargo-deny 0.20.2"},
+        "cargo_fuzz": {"const": "cargo-fuzz 0.13.2"}
+      }
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "version", "image_amd64", "image_arm64"],
+      "properties": {
+        "commit": {"const": "7f793731f1b39eb4f465e960113d2363c311b964"},
+        "version": {"const": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"},
+        "image_amd64": {"const": "quay.io/ceph/ceph@sha256:09ee90f6f3e0c7b9954f71d214ee05e9bbaaaea3716b1dd619603283b829f8b8"},
+        "image_arm64": {"const": "quay.io/ceph/ceph@sha256:6e6bc7b28fa1b334108a3646af5533dfb50db508efdf5b358eb7dd0dd37a48aa"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed", "claimed"],
+      "properties": {
+        "observed": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/runtime_observation"}},
+        "claimed": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/platform"}}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "files"],
+      "properties": {
+        "digest": {"$ref": "#/$defs/sha256"},
+        "files": {"type": "integer", "minimum": 1}
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["native_rows", "ledger_rows", "status_counts"],
+      "properties": {
+        "native_rows": {"const": 623},
+        "ledger_rows": {"const": 905},
+        "status_counts": {
+          "type": "object",
+          "propertyNames": {"enum": [
+            "adapted-r12", "deferred-r12",
+            "implemented-r02", "implemented-r05", "implemented-r07", "implemented-r08", "implemented-r09",
+            "implemented-r10", "implemented-r11", "implemented-r12",
+            "intentional-omission-r12", "planned-not-implemented"
+          ]},
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "priors": {"type": "array", "minItems": 10, "maxItems": 10, "items": {"$ref": "#/$defs/prior"}},
+    "checks": {"type": "array", "minItems": 24, "maxItems": 24, "items": {"$ref": "#/$defs/check"}},
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "artifacts", "twice_run_identical", "first_run_sha256", "second_run_sha256"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"},
+        "artifacts": {"type": "object", "minProperties": 4, "maxProperties": 4, "additionalProperties": {"$ref": "#/$defs/sha256"}},
+        "twice_run_identical": {"const": true},
+        "first_run_sha256": {"$ref": "#/$defs/sha256"},
+        "second_run_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

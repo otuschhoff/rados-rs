@@ -11,6 +11,14 @@ R11 snapshots and specialized object I/O, and R12 administration and parity
 closure are complete. R12 has fresh Rust/Go/native evidence against pinned
 Ceph 20.2.4 monitor, manager, OSD and PG command paths.
 
+R13 introduces the automated qualification, endurance, deterministic release,
+and detached human-review contracts that gate any future Rust distribution.
+R13 tooling, schemas, and verifiers are landed, but the R13 exit gate is
+**not** satisfied: no certifying fuzz report, no four-platform qualification
+report, no 24-hour endurance candidate, and no detached human-review
+signatures are on disk. R13 does not authorize a release tag, crate publish,
+or GitHub Release.
+
 The client will use Tokio and Rust protocol/crypto implementations without a
 Go runtime, native librados, FFI bridge, subprocess, gateway or proxy in the
 shipped path. Go and native Ceph are isolated test oracles only.
@@ -49,8 +57,15 @@ The R12 API scope adds cluster and pool statistics, pool lifecycle,
 application metadata, session addresses, blocklisting, monitor/manager/OSD/PG
 commands, and inconsistent-PG/object inspection. Commands return output and
 status even when the server reports an error; dispatched mutations surface an
-unknown outcome instead of being replayed. The parity ledger now explicitly
-classifies every remaining native and frozen-Go row.
+unknown outcome instead of being replayed. The parity ledger now carries an
+explicit resolved disposition on every one of its 905 rows: 34
+`implemented-r05`, 24 `implemented-r07`, 63 `implemented-r08`,
+205 `implemented-r09`, 66 `implemented-r10`, 75 `implemented-r11`,
+57 `implemented-r12`, 204 `implemented-r02`, 40 `adapted-r12`,
+118 `intentional-omission-r12`, 19 `deferred-r12`, and
+0 `planned-not-implemented`. The 19 `deferred-r12` rows remain explicit
+future R14 work outside the R13 v1 exit gate; the full audit is
+[`docs/r13/api-coverage.md`](docs/r13/api-coverage.md).
 
 License identity: LGPL-2.1-only, subject to preserved upstream notices and
 file-level provenance. No Rust distribution or release approval is claimed.
@@ -77,6 +92,17 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R10 classes, locks and watches status](docs/r10/STATUS.md)
 - [R11 snapshots and specialized I/O status](docs/r11/STATUS.md)
 - [R12 administration and parity closure status](docs/r12/STATUS.md)
+- [R13 index](docs/r13/README.md)
+- [R13 execution log](docs/r13/STATUS.md)
+- [R13 compatibility](docs/r13/compatibility.md)
+- [R13 API coverage](docs/r13/api-coverage.md)
+- [R13 dependencies](docs/r13/dependencies.md)
+- [R13 performance](docs/r13/performance.md)
+- [R13 migration notes](docs/r13/migration.md)
+- [R13 troubleshooting](docs/r13/troubleshooting.md)
+- [R13 release contract](docs/r13/release.md)
+- [R13 automated review](docs/r13/automated-review.md)
+- [R13 detached human review](docs/r13/human-review.md)
 - [R02 execution and R03 handoff](docs/r02/STATUS.md)
 - [R03 architecture](docs/r03/architecture.md)
 - [R03 wire formats](docs/r03/wire-format.md)
@@ -90,6 +116,7 @@ file-level provenance. No Rust distribution or release approval is claimed.
 - [R04 dependency review](docs/r04/dependencies.md)
 - [R04 execution and R05 handoff](docs/r04/STATUS.md)
 - [Repository decision](docs/decisions/0001-separate-repository.md)
+- [R13 qualification contract](docs/decisions/0002-r13-qualification-contract.md)
 - [Technical/dependency decisions](docs/r00/decisions.md)
 - [905-row parity ledger](docs/r00/parity-ledger.csv)
 - [Reference verification and import workflow](reference/README.md)

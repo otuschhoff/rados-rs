@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "suite_id": "r13/fuzz-validation-v1",
+  "profile": "pending",
+  "status": "pending",
+  "started_at": "1970-01-01T00:00:00Z",
+  "finished_at": "1970-01-01T00:00:00Z",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schema_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "platform": {
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "toolchain": {
+    "nightly": "nightly-2026-09-01",
+    "rustc": "rustc pending",
+    "cargo_fuzz": "cargo-fuzz 0.13.2"
+  },
+  "campaigns": []
+}

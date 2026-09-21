@@ -1,20 +1,72 @@
 Rust dependency notices
 =======================
 
+This file records the third-party Rust crates that appear in the shipped
+`rados-rs` crate. Every version is exactly pinned in `Cargo.toml` (`=X.Y.Z`).
+Copyright, licence, and source lines below are verified against each crate's
+upstream repository. Qualification-only tool crates (used only by
+`rados-r13-tools`, `rados-r0*-tools`, or the fuzz package) are listed
+separately at the bottom and are excluded from the shipped crate archive by
+the `Cargo.toml` `include` list.
+
+Shipped runtime dependencies (crate `rados-rs`)
+-----------------------------------------------
+
+aes v0.9.3
+  License: Apache-2.0 OR MIT
+  Copyright: RustCrypto Developers
+  Source: https://github.com/RustCrypto/block-ciphers
+
 aes-gcm v0.11.1
   License: Apache-2.0 OR MIT
   Copyright: RustCrypto Developers
   Source: https://github.com/RustCrypto/AEADs
+
+base64 v0.22.1
+  License: Apache-2.0 OR MIT
+  Copyright: Alice Maz, Marshall Pierce and contributors
+  Source: https://github.com/marshallpierce/rust-base64
+
+cbc v0.2.1
+  License: Apache-2.0 OR MIT
+  Copyright: RustCrypto Developers
+  Source: https://github.com/RustCrypto/block-modes
 
 crc32c v0.6.8
   License: Apache-2.0 OR MIT
   Copyright: Zack Owens and contributors
   Source: https://github.com/zowens/crc32c
 
+getrandom v0.4.3
+  License: Apache-2.0 OR MIT
+  Copyright: Rust Project Developers and contributors
+  Source: https://github.com/rust-random/getrandom
+
 hickory-resolver v0.26.3
   License: MIT OR Apache-2.0
   Copyright: The contributors to Hickory DNS
   Source: https://github.com/hickory-dns/hickory-dns
+
+hmac v0.13.0
+  License: Apache-2.0 OR MIT
+  Copyright: RustCrypto Developers
+  Source: https://github.com/RustCrypto/MACs
+
+serde v1.0.229 (optional; entered graph only when a caller enables one of the
+                r04..r12-integration features)
+  License: Apache-2.0 OR MIT
+  Copyright: Erick Tryzelaar, David Tolnay and contributors
+  Source: https://github.com/serde-rs/serde
+
+serde_json v1.0.151
+  License: Apache-2.0 OR MIT
+  Copyright: Erick Tryzelaar, David Tolnay and contributors
+  Source: https://github.com/serde-rs/json
+
+sha2 v0.11.0
+  License: Apache-2.0 OR MIT
+  Copyright: RustCrypto Developers
+  Source: https://github.com/RustCrypto/hashes
 
 tokio v1.47.1
   License: MIT
@@ -26,7 +78,55 @@ zeroize v1.9.0
   Copyright: Tony Arcieri and contributors
   Source: https://github.com/RustCrypto/utils/tree/master/zeroize
 
-The unpublished evidence tools use base64, command-group, serde, serde_json and
-sha2. The isolated fuzz package additionally uses libfuzzer-sys. Their complete
-pinned graphs and license policy are recorded in docs/r02/dependencies.md and
-the Cargo lockfiles.
+Qualification-only development dependencies (crate `rados-rs`)
+--------------------------------------------------------------
+
+loom v0.7.2
+  License: MIT
+  Copyright: Carl Lerche and contributors
+  Source: https://github.com/tokio-rs/loom
+
+Fuzz package (`fuzz/`, excluded from the shipped crate archive)
+---------------------------------------------------------------
+
+libfuzzer-sys v0.4.13
+  License: MIT OR Apache-2.0 OR NCSA
+  Copyright: The rust-fuzz Project Developers
+  Source: https://github.com/rust-fuzz/libfuzzer
+
+The remaining crates in the fuzz package (`aes`, `aes-gcm`, `base64`, `cbc`,
+`crc32c`, `hmac`, `sha2`, `tokio`, `zeroize`) are the same pinned versions
+listed above.
+
+R13 qualification tools (`tools/r13/`, excluded from the shipped crate archive)
+------------------------------------------------------------------------------
+
+ed25519-dalek v2.1.1
+  License: BSD-3-Clause
+  Copyright: isis lovecruft, Henry de Valence and contributors
+  Source: https://github.com/dalek-cryptography/curve25519-dalek
+
+sha1 v0.11.0
+  License: Apache-2.0 OR MIT
+  Copyright: RustCrypto Developers
+  Source: https://github.com/RustCrypto/hashes
+
+The remaining crates in `tools/r13/` (`base64`, `serde`, `serde_json`, `sha2`,
+`tokio`) are the same pinned versions as the shipped graph.
+
+Earlier phase tool crates (`tools/r01/` through `tools/r12/`) use the same
+pinned crates plus their own phase-specific helpers as recorded in the
+per-phase dependency documents.
+
+Bookkeeping
+-----------
+
+- Every direct dependency's licence appears on the `deny.toml`
+  `licenses.allow` list (`Apache-2.0`, `LGPL-2.1-only`, `MIT`,
+  `Unicode-3.0`, `Unlicense`) except `ed25519-dalek 2.1.1`, which is
+  `BSD-3-Clause` and enters only the R13 qualification tool graph that
+  the shipped crate archive excludes.
+- Multiple-version drift in the ed25519-dalek/curve25519-dalek transitive
+  graph (older RustCrypto stack) is declared in `deny.toml` under `bans.skip`.
+- Complete pinned dependency graphs live in `Cargo.lock` and are surveyed
+  in `docs/r02/dependencies.md` and `docs/r13/dependencies.md`.
