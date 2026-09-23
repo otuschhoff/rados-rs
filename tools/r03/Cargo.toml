@@ -18,7 +18,7 @@ command-group = "=5.0.1"
 serde = { version = "=1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 sha2 = { version = "=0.11.0", default-features = false }
-tokio = { version = "=1.47.1", default-features = false, features = ["io-util", "sync"] }
+tokio = { version = "1.47.1", default-features = false, features = ["io-util", "sync"] }
 
 [lints]
 workspace = true

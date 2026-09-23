@@ -24,7 +24,7 @@ hmac = "=0.13.0"
 libfuzzer-sys = "=0.4.13"
 rados = { package = "rados-rs", path = "..", features = ["r05-integration", "r06-integration", "r07-integration", "r08-integration", "r09-integration", "r10-integration", "r11-integration", "r12-integration"] }
 sha2 = "=0.11.0"
-tokio = { version = "=1.47.1", default-features = false, features = ["io-util"] }
+tokio = { version = "1.47.1", default-features = false, features = ["io-util"] }
 zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
 
 [[bin]]

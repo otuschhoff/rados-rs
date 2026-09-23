@@ -135,6 +135,11 @@ Ordinary Rust checks require no Go, Ceph libraries, Docker or network:
 cargo test --workspace --locked
 ```
 
+The library accepts Tokio 1.x starting at 1.47.1 so downstream applications can
+share a compatible runtime. The workspace lockfile selects Tokio 1.53.1 for
+reproducible offline validation. This dependency compatibility change does not
+satisfy the outstanding live qualification or release gates described above.
+
 The runnable [R12 administration example](examples/r12_administration.rs)
 loads `/etc/ceph/ceph.conf` and demonstrates read-only statistics, application
 metadata, and monitor-command handling.
