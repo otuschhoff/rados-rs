@@ -1400,6 +1400,13 @@ impl OSDSession {
         options: &OperationOptions,
     ) -> Result<Message, Error> {
         loop {
+            if let Some(error) = self.state.lock().await.failure {
+                return Err(error);
+            }
+            let slot = match wait_for(self.raw.wait_for_capacity(&message), options).await {
+                Ok(slot) => slot,
+                Err(error) => return Err(self.state.lock().await.failure.unwrap_or(error)),
+            };
             let state = self.state.lock().await;
             if let Some(error) = state.failure {
                 return Err(error);
@@ -1411,10 +1418,20 @@ impl OSDSession {
             if blocked {
                 let mut changed = self.changed.subscribe();
                 drop(state);
+                drop(slot);
                 wait_for_change(&mut changed, options).await?;
                 continue;
             }
-            let admission = admit_with_cancellation(&self.raw, message, options, mutation).await?;
+            let admission =
+                admit_with_cancellation(&self.raw, message.clone(), options, mutation).await;
+            drop(slot);
+            let admission = match admission {
+                Err(Error::QueueSaturated) => {
+                    drop(state);
+                    continue;
+                }
+                result => result?,
+            };
             let AdmissionOutcome::Request(mut request) = admission else {
                 let AdmissionOutcome::Reply(reply) = admission else {
                     unreachable!()
@@ -1447,11 +1464,19 @@ impl OSDSession {
                 return hook(message);
             }
         }
+        if let Some(error) = self.state.lock().await.failure {
+            return Err(error);
+        }
+        let slot = match wait_for(self.raw.wait_for_capacity(&message), options).await {
+            Ok(slot) => slot,
+            Err(error) => return Err(self.state.lock().await.failure.unwrap_or(error)),
+        };
         let state = self.state.lock().await;
         if let Some(error) = state.failure {
             return Err(error);
         }
         let admission = admit_with_cancellation(&self.raw, message, options, false).await?;
+        drop(slot);
         let AdmissionOutcome::Request(mut request) = admission else {
             let AdmissionOutcome::Reply(reply) = admission else {
                 unreachable!()
@@ -3265,6 +3290,61 @@ mod tests {
         for sequence in admitted {
             client.complete_mutation(sequence, None);
         }
+    }
+
+    #[tokio::test]
+    async fn session_capacity_wait_preserves_deadline_and_cancellation() {
+        let (client, _server) = duplex(1);
+        let raw = raw_session(client);
+        let session = OSDSession::spawn(
+            Arc::clone(&raw),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(1),
+        );
+        let mut requests = Vec::new();
+        for transaction_id in 1..=4 {
+            let mut message = request_message();
+            message.header.transaction_id = transaction_id;
+            requests.push(raw.admit(message, false).await.expect("fill session"));
+        }
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_millis(20));
+        assert_eq!(
+            session
+                .submit(
+                    backoff(BACKOFF_BLOCK).pg,
+                    &object(),
+                    request_message(),
+                    true,
+                    &options
+                )
+                .await,
+            Err(Error::Timeout)
+        );
+        let cancellation = crate::CancellationToken::new();
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1))
+            .with_cancellation(cancellation.clone());
+        let object = object();
+        let waiting = session.submit(
+            backoff(BACKOFF_BLOCK).pg,
+            &object,
+            request_message(),
+            true,
+            &options,
+        );
+        let cancel = async {
+            tokio::task::yield_now().await;
+            assert!(session.state.try_lock().is_ok());
+            cancellation.cancel();
+        };
+        let (result, ()) = tokio::join!(waiting, cancel);
+        assert_eq!(result, Err(Error::Cancelled));
+        let snapshot = raw.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.queued + snapshot.in_flight, 4);
+        drop(requests);
+        session.shutdown().await;
     }
 
     #[tokio::test]

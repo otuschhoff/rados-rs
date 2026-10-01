@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit, mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
 use super::control::Control;
-use super::message::Message;
+use super::message::{MESSAGE_HEADER_SIZE, Message};
 use super::session::{Effect, Event as SessionEvent, Input, Machine, SessionError, Snapshot};
 use super::transport::{Codec, Connection, Event as TransportEvent, IoStream};
 
@@ -60,8 +60,18 @@ pub(crate) struct Session {
     incoming: Mutex<mpsc::Receiver<Message>>,
     terminal: watch::Receiver<Option<SessionError>>,
     stop: watch::Sender<bool>,
+    capacity: watch::Receiver<Snapshot>,
+    admission_serial: Mutex<()>,
+    admission_waiters: Semaphore,
+    queue_limit: usize,
+    retained_limit: u64,
     next_request_id: AtomicU64,
     owner: Mutex<Option<JoinHandle<()>>>,
+}
+
+pub(crate) struct AdmissionSlot<'a> {
+    _waiter: SemaphorePermit<'a>,
+    _serial: MutexGuard<'a, ()>,
 }
 
 pub(crate) struct Request {
@@ -85,6 +95,8 @@ impl Session {
         connector: Option<Connector>,
     ) -> Self {
         let capacity = machine.queue_limit();
+        let retained_limit = machine.retained_limit();
+        let (capacity_tx, capacity_rx) = watch::channel(machine.snapshot());
         let (commands, command_rx) = mpsc::channel(capacity);
         let (events_tx, events) = mpsc::channel(capacity);
         let (incoming_tx, incoming) = mpsc::channel(capacity);
@@ -100,6 +112,7 @@ impl Session {
                 incoming: incoming_tx,
                 terminal: terminal_tx,
                 stop: stop_rx,
+                capacity: capacity_tx,
             },
         ));
         Self {
@@ -108,8 +121,53 @@ impl Session {
             incoming: Mutex::new(incoming),
             terminal,
             stop,
+            capacity: capacity_rx,
+            admission_serial: Mutex::new(()),
+            admission_waiters: Semaphore::new(capacity.saturating_mul(4)),
+            queue_limit: capacity,
+            retained_limit,
             next_request_id: AtomicU64::new(1),
             owner: Mutex::new(Some(owner)),
+        }
+    }
+
+    pub(crate) async fn wait_for_capacity(
+        &self,
+        message: &Message,
+    ) -> Result<AdmissionSlot<'_>, SessionError> {
+        let bytes = u64::try_from(MESSAGE_HEADER_SIZE)
+            .ok()
+            .and_then(|header| header.checked_add(u64::from(message.lengths.front)))
+            .and_then(|total| total.checked_add(u64::from(message.lengths.middle)))
+            .and_then(|total| total.checked_add(u64::from(message.lengths.data)))
+            .ok_or(SessionError::Malformed)?;
+        if bytes > self.retained_limit {
+            return Err(SessionError::QueueSaturated);
+        }
+        let waiter = self
+            .admission_waiters
+            .try_acquire()
+            .map_err(|_| SessionError::QueueSaturated)?;
+        let serial = self.admission_serial.lock().await;
+        let mut capacity = self.capacity.clone();
+        loop {
+            capacity.borrow_and_update();
+            if *self.stop.borrow() {
+                return Err(SessionError::Closed);
+            }
+            if let Some(error) = self.terminal() {
+                return Err(error);
+            }
+            let snapshot = self.snapshot().await?;
+            if snapshot.queued + snapshot.in_flight < self.queue_limit
+                && bytes <= self.retained_limit.saturating_sub(snapshot.retained_bytes)
+            {
+                return Ok(AdmissionSlot {
+                    _waiter: waiter,
+                    _serial: serial,
+                });
+            }
+            capacity.changed().await.map_err(|_| SessionError::Closed)?;
         }
     }
 
@@ -452,6 +510,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capacity_wait_resumes_after_cancellation_without_admitting() {
+        let (client, _server) = duplex(1);
+        let session = Session::spawn(machine(1), Some(setup(client)), None);
+        let mut first = session
+            .admit(message(b"first"), false)
+            .await
+            .expect("first");
+        let second = message(b"second");
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                session.wait_for_capacity(&second)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            session.snapshot().await.expect("snapshot").queued
+                + session.snapshot().await.expect("snapshot").in_flight,
+            1
+        );
+        let _ = first.cancel().await;
+        let slot = tokio::time::timeout(Duration::from_secs(1), session.wait_for_capacity(&second))
+            .await
+            .expect("capacity released")
+            .expect("slot");
+        drop(slot);
+        assert_eq!(
+            session.snapshot().await.expect("snapshot").retained_bytes,
+            0
+        );
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn capacity_wait_rejects_oversized_requests_and_excess_waiters() {
+        let (client, _server) = duplex(1);
+        let session = Session::spawn(machine(1), Some(setup(client)), None);
+        let mut oversized = message(b"large");
+        oversized.lengths.data = u32::MAX;
+        assert!(matches!(
+            session.wait_for_capacity(&oversized).await,
+            Err(SessionError::QueueSaturated)
+        ));
+        let permits: Vec<_> = (0..4)
+            .map(|_| session.admission_waiters.try_acquire().expect("waiter"))
+            .collect();
+        assert!(matches!(
+            session.wait_for_capacity(&message(b"small")).await,
+            Err(SessionError::QueueSaturated)
+        ));
+        drop(permits);
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn capacity_wait_enforces_bytes_with_free_message_slots() {
+        let (client, _server) = duplex(1);
+        let session = Session::spawn(machine(4), Some(setup(client)), None);
+        let payload = message(&vec![0; 4096]);
+        let mut first = session.admit(payload.clone(), false).await.expect("first");
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(20),
+                session.wait_for_capacity(&payload)
+            )
+            .await
+            .is_err()
+        );
+        let snapshot = session.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.queued + snapshot.in_flight, 1);
+        assert!(snapshot.retained_bytes <= 8192);
+        let _ = first.cancel().await;
+        let slot =
+            tokio::time::timeout(Duration::from_secs(1), session.wait_for_capacity(&payload))
+                .await
+                .expect("bytes released")
+                .expect("slot");
+        drop(slot);
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn capacity_wait_is_interrupted_by_shutdown() {
+        let (client, _server) = duplex(1);
+        let session = Arc::new(Session::spawn(machine(1), Some(setup(client)), None));
+        let first = session
+            .admit(message(b"first"), false)
+            .await
+            .expect("first");
+        let waiting = Arc::clone(&session);
+        let waiter = tokio::spawn(async move {
+            waiting
+                .wait_for_capacity(&message(b"second"))
+                .await
+                .map(|_| ())
+        });
+        session.shutdown().await;
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), waiter)
+                .await
+                .expect("shutdown wakes waiter")
+                .expect("joined"),
+            Err(SessionError::Closed)
+        ));
+        drop(first);
+    }
+
+    #[tokio::test]
     async fn dropped_admitted_request_remains_supervised_until_reply() {
         let codec = CrcCodec {
             with_data_crc: true,
@@ -741,6 +908,7 @@ struct OwnerChannels {
     incoming: mpsc::Sender<Message>,
     terminal: watch::Sender<Option<SessionError>>,
     stop: watch::Receiver<bool>,
+    capacity: watch::Sender<Snapshot>,
 }
 
 async fn run_owner(
@@ -755,6 +923,7 @@ async fn run_owner(
         incoming,
         terminal,
         mut stop,
+        capacity: capacity_tx,
     } = channels;
     let capacity = machine.queue_limit();
     let (transport_events, mut transport_rx) = mpsc::channel(capacity);
@@ -800,6 +969,7 @@ async fn run_owner(
         owner.drive(Input::Start { ready: false }).await;
     }
 
+    capacity_tx.send_replace(owner.machine.snapshot());
     loop {
         tokio::select! {
             changed = stop.changed() => {
@@ -828,6 +998,15 @@ async fn run_owner(
                 let _ = joined;
             }
         }
+        capacity_tx.send_if_modified(|snapshot| {
+            let current = owner.machine.snapshot();
+            if *snapshot == current {
+                false
+            } else {
+                *snapshot = current;
+                true
+            }
+        });
     }
 
     let _ = owner.connector_stop.send(true);

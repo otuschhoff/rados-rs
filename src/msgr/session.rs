@@ -472,6 +472,10 @@ impl Machine {
         self.config.max_queued_messages
     }
 
+    pub(crate) fn retained_limit(&self) -> u64 {
+        self.config.max_retained_bytes
+    }
+
     fn start(&mut self, ready: bool, effects: &mut Vec<Effect>) {
         if self.state != State::Disconnected
             || self.connect_pending

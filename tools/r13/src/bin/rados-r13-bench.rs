@@ -129,8 +129,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     for &size in &BENCH_SIZES {
         for &concurrency in &BENCH_CONCURRENCIES {
             for &workload in &BENCH_WORKLOADS {
-                let row =
-                    run_row(&pool, transport_static, size, concurrency, workload).await?;
+                let row = run_row(&pool, transport_static, size, concurrency, workload).await?;
                 rows.push(row);
             }
         }
@@ -179,14 +178,15 @@ async fn run_row(
     let payload = Arc::new(seeded_payload(size, u64::from(concurrency)));
 
     let mut objects: Vec<ObjectRef> = Vec::with_capacity(concurrency as usize);
+    let mut outcome: Result<Row, Box<dyn std::error::Error>> = async {
     for worker in 0..concurrency {
         let name = format!("bench-{transport}-{size}-c{concurrency}-{workload}-{worker:04}");
         let object = pool.object(name.as_bytes())?;
+        objects.push(object.clone());
         let _ = object.remove(op_options()).await;
         if matches!(workload, "read" | "mixed") {
             object.write_full(payload.as_slice(), op_options()).await?;
         }
-        objects.push(object);
     }
 
     let start = Instant::now();
@@ -243,19 +243,8 @@ async fn run_row(
         }));
     }
 
-    let mut latencies_ns: Vec<u64> =
-        Vec::with_capacity(usize::try_from(operations).unwrap_or(0));
-    for handle in handles {
-        let inner = handle
-            .await
-            .map_err(|error| format!("bench worker join: {error}"))??;
-        latencies_ns.extend(inner);
-    }
+    let mut latencies_ns = collect_latencies(handles).await?;
     let elapsed = Instant::now().saturating_duration_since(start);
-
-    for object in objects {
-        let _ = object.remove(op_options()).await;
-    }
 
     if latencies_ns.len() as u64 != operations {
         return Err(format!(
@@ -285,6 +274,39 @@ async fn run_row(
         p95_ns: percentile(&latencies_ns, 95).max(1),
         p99_ns: percentile(&latencies_ns, 99).max(1),
     })
+    }.await;
+    for object in objects {
+        if let Err(error) = object.remove(op_options()).await
+            && error.kind() != rados::ErrorKind::NotFound
+            && outcome.is_ok()
+        {
+            outcome = Err(error.into());
+        }
+    }
+    outcome.map_err(|error| {
+        format!("row size={size} c={concurrency} workload={workload}: {error}").into()
+    })
+}
+
+async fn collect_latencies(
+    handles: Vec<tokio::task::JoinHandle<Result<Vec<u64>, BenchError>>>,
+) -> Result<Vec<u64>, BenchError> {
+    let mut latencies = Vec::new();
+    let mut first_error = None;
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(values)) => latencies.extend(values),
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            Err(error) => {
+                first_error.get_or_insert_with(|| {
+                    BenchError::Bench(format!("bench worker join: {error}"))
+                });
+            }
+        }
+    }
+    first_error.map_or(Ok(latencies), Err)
 }
 
 #[derive(Debug)]
@@ -435,7 +457,8 @@ fn next_value(
     args: &mut std::iter::Skip<std::env::Args>,
     flag: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    args.next().ok_or_else(|| format!("{flag} requires a value").into())
+    args.next()
+        .ok_or_else(|| format!("{flag} requires a value").into())
 }
 
 // A version of parse_args driven from an in-memory arg list so tests do
@@ -490,6 +513,36 @@ fn parse_args_from(arguments: Vec<String>) -> Result<BenchArgs, Box<dyn std::err
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn worker_failure_drains_remaining_workers() {
+        let (completed, completion) = tokio::sync::oneshot::channel();
+        let handles = vec![
+            tokio::spawn(async { Err(BenchError::Bench("scripted failure".to_owned())) }),
+            tokio::spawn(async move {
+                tokio::task::yield_now().await;
+                let _ = completed.send(());
+                Ok(vec![1, 2])
+            }),
+        ];
+        assert!(collect_latencies(handles).await.is_err());
+        completion.await.expect("remaining worker completed");
+    }
+
+    #[tokio::test]
+    async fn worker_panic_drains_remaining_workers() {
+        let (completed, completion) = tokio::sync::oneshot::channel();
+        let handles = vec![
+            tokio::spawn(async { panic!("scripted worker panic") }),
+            tokio::spawn(async move {
+                tokio::task::yield_now().await;
+                let _ = completed.send(());
+                Ok(vec![1, 2])
+            }),
+        ];
+        assert!(collect_latencies(handles).await.is_err());
+        completion.await.expect("remaining worker completed");
+    }
+
     use super::*;
 
     #[test]
@@ -540,7 +593,9 @@ mod tests {
         ])
         .unwrap_err();
         assert!(
-            error.to_string().contains("only produces implementation=\"rust\""),
+            error
+                .to_string()
+                .contains("only produces implementation=\"rust\""),
             "unexpected error: {error}"
         );
     }
