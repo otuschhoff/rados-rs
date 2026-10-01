@@ -1194,6 +1194,9 @@ impl Client {
                         .await
                         .map_err(|_| SessionError::Disconnected)?
                         .map_err(|_| SessionError::Disconnected)?;
+                stream
+                    .set_nodelay(true)
+                    .map_err(|_| SessionError::Disconnected)?;
                 service.connect(stream).await.map_err(SessionError::from)
             })
         });

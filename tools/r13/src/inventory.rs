@@ -9,6 +9,7 @@
 //! No row is repaired or normalised. The check exists to detect drift
 //! between what the qualification report claims and what the ledger says.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -19,10 +20,11 @@ use crate::constants::{
 
 /// Structured inventory summary. Included on qualification reports so the
 /// verifier can confirm the count without re-walking the CSVs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct InventorySummary {
     pub native_rows: usize,
     pub ledger_rows: usize,
+    pub status_counts: BTreeMap<String, u32>,
 }
 
 /// Read-only check.
@@ -57,6 +59,7 @@ pub fn check(root: &Path) -> Result<InventorySummary, String> {
         .position(|column| column == "status")
         .ok_or_else(|| "parity ledger is missing a `status` column".to_owned())?;
     let header_columns = ledger.header.split(',').count();
+    let mut status_counts = BTreeMap::new();
     for (index, row) in ledger.rows.iter().enumerate() {
         let status = csv_field(row, status_column, header_columns).ok_or_else(|| {
             format!(
@@ -71,10 +74,12 @@ pub fn check(root: &Path) -> Result<InventorySummary, String> {
                 index + 2
             ));
         }
+        *status_counts.entry(status.to_owned()).or_insert(0) += 1;
     }
     Ok(InventorySummary {
         native_rows: native.rows.len(),
         ledger_rows: ledger.rows.len(),
+        status_counts,
     })
 }
 

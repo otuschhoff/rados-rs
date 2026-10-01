@@ -218,18 +218,26 @@ pub fn verify_report(root: &Path, report_path: &Path) -> Result<QualificationRep
         }
     }
 
+    verify_inventory(root, &report.inventory)?;
+    Ok(report)
+}
+
+fn verify_inventory(root: &Path, reported: &Inventory) -> Result<(), String> {
     let summary = inventory::check(root)?;
-    if report.inventory.native_rows as usize != summary.native_rows
-        || report.inventory.ledger_rows as usize != summary.ledger_rows
+    if reported.native_rows as usize != summary.native_rows
+        || reported.ledger_rows as usize != summary.ledger_rows
     {
         return Err("qualification inventory row counts do not match repository state".into());
     }
-    if report.inventory.native_rows as usize != NATIVE_INVENTORY_ROWS
-        || report.inventory.ledger_rows as usize != PARITY_LEDGER_ROWS
+    if reported.native_rows as usize != NATIVE_INVENTORY_ROWS
+        || reported.ledger_rows as usize != PARITY_LEDGER_ROWS
     {
         return Err("qualification inventory row counts do not match frozen R13 v1 scope".into());
     }
-    Ok(report)
+    if reported.status_counts != summary.status_counts {
+        return Err("qualification inventory status counts do not match repository state".into());
+    }
+    Ok(())
 }
 
 fn validate_shape(report: &QualificationReport) -> Result<(), String> {
@@ -455,6 +463,28 @@ mod tests {
     use crate::release::{ReleaseInput, build};
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn inventory_binding_rejects_fabricated_distribution() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let summary = inventory::check(&root).expect("read actual inventory");
+        let mut reported = Inventory {
+            native_rows: u32::try_from(summary.native_rows).expect("native row count"),
+            ledger_rows: u32::try_from(summary.ledger_rows).expect("ledger row count"),
+            status_counts: summary.status_counts,
+        };
+        verify_inventory(&root, &reported).expect("actual distribution accepted");
+        reported.status_counts =
+            BTreeMap::from([("implemented-r02".to_owned(), reported.ledger_rows)]);
+        assert_eq!(
+            reported.status_counts.values().sum::<u32>(),
+            reported.ledger_rows
+        );
+        assert_eq!(
+            verify_inventory(&root, &reported).expect_err("reject fabricated distribution"),
+            "qualification inventory status counts do not match repository state"
+        );
+    }
 
     fn sample_release_input() -> ReleaseInput {
         let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();

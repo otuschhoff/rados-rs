@@ -669,6 +669,9 @@ fn production_session_factory(config: Config) -> SessionFactory {
             .await
             .map_err(|_| ManagerError::Session(SessionError::Disconnected))?
             .map_err(|_| ManagerError::Session(SessionError::Disconnected))?;
+            stream
+                .set_nodelay(true)
+                .map_err(|_| ManagerError::Session(SessionError::Disconnected))?;
             let initial = service
                 .connect(stream)
                 .await
@@ -703,6 +706,9 @@ fn production_session_factory(config: Config) -> SessionFactory {
                     .await
                     .map_err(|_| SessionError::Disconnected)?
                     .map_err(|_| SessionError::Disconnected)?;
+                    stream
+                        .set_nodelay(true)
+                        .map_err(|_| SessionError::Disconnected)?;
                     service.connect(stream).await.map_err(SessionError::from)
                 })
             });

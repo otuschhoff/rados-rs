@@ -314,21 +314,14 @@ for phase in r03 r04 r05 r06 r07 r08 r09 r10 r11 r12; do
 done
 
 # Inventory counts.
-inventory_output=$(cargo run --quiet --locked -p rados-r13-tools --bin rados-r13-qualify -- --check-inventory --root "$root" 2>&1)
-native_rows=$(printf '%s' "$inventory_output" | sed -n 's/.*native_rows=\([0-9][0-9]*\).*/\1/p')
-ledger_rows=$(printf '%s' "$inventory_output" | sed -n 's/.*ledger_rows=\([0-9][0-9]*\).*/\1/p')
-if [ -z "$native_rows" ] || [ -z "$ledger_rows" ]; then
-	printf 'R13 qualify: inventory summary output malformed: %s\n' "$inventory_output" >&2
+if ! inventory_output=$(cargo run --quiet --locked -p rados-r13-tools --bin rados-r13-qualify -- --print-inventory --root "$root"); then
+	printf 'R13 qualify: inventory summary failed\n' >&2
 	overall_status=failed
-	native_rows=${native_rows:-0}
-	ledger_rows=${ledger_rows:-0}
+	inventory_output='{"native_rows":0,"ledger_rows":0,"status_counts":{}}'
 fi
-
-# The ledger rows are dominated by implemented-r02 in the current
-# baseline; the verifier only cross-checks the total. We list a single
-# status count that matches the total so the producer stays honest.
-status_counts=$(jq -n --argjson total "${ledger_rows:-0}" \
-	'{ "implemented-r02": $total }')
+native_rows=$(printf '%s' "$inventory_output" | jq '.native_rows')
+ledger_rows=$(printf '%s' "$inventory_output" | jq '.ledger_rows')
+status_counts=$(printf '%s' "$inventory_output" | jq '.status_counts')
 
 # Source digest and file count.
 source_digest=$(cargo run --quiet --locked -p rados-r13-tools --bin rados-r13-qualify -- --print-source-digest --root "$root")
@@ -409,7 +402,7 @@ jq -n \
 # route the file to the failed evidence path with the honest status.
 if [ "$overall_status" = passed ]; then
 	if cargo run --quiet --locked -p rados-r13-tools --bin rados-r13-qualify -- \
-		--verify --root "$root" --report "$report_temp"; then
+		--root "$root" --report "$report_temp"; then
 		mv "$report_temp" "$pass_path"
 		rm -f "$fail_path"
 		printf 'R13 qualify passed: %s\n' "$pass_path"

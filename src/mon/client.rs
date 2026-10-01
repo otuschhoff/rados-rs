@@ -1569,6 +1569,9 @@ pub(crate) fn authenticated_session_factory(
             .await
             .map_err(|_| MonitorError::ConnectTimeout)?
             .map_err(|_| MonitorError::Session(SessionError::Disconnected))?;
+            stream
+                .set_nodelay(true)
+                .map_err(|_| MonitorError::Session(SessionError::Disconnected))?;
             let initial = authority
                 .connect(stream)
                 .await
@@ -1591,6 +1594,9 @@ pub(crate) fn authenticated_session_factory(
                     .await
                     .map_err(|_| SessionError::Disconnected)?
                     .map_err(|_| SessionError::Disconnected)?;
+                    stream
+                        .set_nodelay(true)
+                        .map_err(|_| SessionError::Disconnected)?;
                     authority.connect(stream).await.map_err(SessionError::from)
                 })
             });

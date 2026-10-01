@@ -41,6 +41,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--check-inventory" => mode = Mode::CheckInventory,
+            "--print-inventory" => mode = Mode::PrintInventory,
             "--print-checks" => mode = Mode::PrintChecks,
             "--print-source-artifacts" => mode = Mode::PrintSourceArtifacts,
             "--print-source-digest" => mode = Mode::PrintSourceDigest,
@@ -78,6 +79,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{id}");
             }
         }
+        Mode::PrintInventory => {
+            let summary = check_inventory(&root)?;
+            println!("{}", serde_json::to_string(&summary)?);
+        }
         Mode::PrintSourceArtifacts => {
             let artifacts = source::source_artifacts(&root)?;
             let bytes = serde_json::to_vec(&artifacts)
@@ -89,15 +94,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", source::source_digest(&root)?);
         }
         Mode::RequireFuzzCertifying => {
-            let corpus = corpus_root.ok_or_else(|| {
-                "--require-fuzz-certifying requires --corpus-root".to_owned()
-            })?;
-            let bound = fuzz::verify_report(
-                &root,
-                &fuzz_report,
-                &corpus,
-                fuzz::Profile::Certifying,
-            )?;
+            let corpus = corpus_root
+                .ok_or_else(|| "--require-fuzz-certifying requires --corpus-root".to_owned())?;
+            let bound =
+                fuzz::verify_report(&root, &fuzz_report, &corpus, fuzz::Profile::Certifying)?;
             println!(
                 "R13 fuzz certifying gate passed: {} campaigns={}",
                 Path::new(&fuzz_report).display(),
@@ -113,6 +113,7 @@ fn print_help() {
         "Usage:\n\
          \n  rados-r13-qualify --root PATH --report PATH\n\
          \n  rados-r13-qualify --check-inventory [--root PATH]\n\
+         \n  rados-r13-qualify --print-inventory [--root PATH]\n\
          \n  rados-r13-qualify --print-checks\n\
          \n  rados-r13-qualify --print-source-artifacts --root PATH\n\
          \n  rados-r13-qualify --print-source-digest --root PATH\n\
@@ -134,6 +135,7 @@ fn print_help() {
 enum Mode {
     Verify,
     CheckInventory,
+    PrintInventory,
     PrintChecks,
     PrintSourceArtifacts,
     PrintSourceDigest,
