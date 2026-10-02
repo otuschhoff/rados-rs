@@ -1017,6 +1017,10 @@ impl Machine {
         if !self.invalidate_controls(effects) {
             return;
         }
+        if error == SessionError::QueueSaturated {
+            self.fail_terminal(error, effects);
+            return;
+        }
         effects.push(Effect::Event(Event::TransportFault(error)));
         effects.push(Effect::CloseTransport {
             generation: self.generation,

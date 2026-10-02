@@ -754,6 +754,7 @@ fn front_message(
         front,
         middle: Vec::new(),
         data: Vec::new(),
+        ..Message::default()
     })
 }
 

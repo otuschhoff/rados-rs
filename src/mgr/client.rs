@@ -184,6 +184,18 @@ impl ManagerClient {
         config: Config,
         factory: Option<SessionFactory>,
     ) -> Result<Self, ManagerError> {
+        Self::new_with_budget(
+            config,
+            factory,
+            crate::msgr::budget::ReceiveBudget::defaults(),
+        )
+    }
+
+    pub(crate) fn new_with_budget(
+        config: Config,
+        factory: Option<SessionFactory>,
+        receive_budget: Arc<crate::msgr::budget::ReceiveBudget>,
+    ) -> Result<Self, ManagerError> {
         if config.message_max_bytes == 0
             || config.retry_delay.is_zero()
             || config.max_attempts == 0
@@ -196,7 +208,8 @@ impl ManagerClient {
             return Err(ManagerError::InvalidConfig);
         }
         let (done, _) = watch::channel(false);
-        let factory = factory.unwrap_or_else(|| production_session_factory(config.clone()));
+        let factory =
+            factory.unwrap_or_else(|| production_session_factory(config.clone(), receive_budget));
         Ok(Self {
             config,
             factory,
@@ -639,11 +652,16 @@ fn authority_source_from_slot(
     })
 }
 
-fn production_session_factory(config: Config) -> SessionFactory {
+fn production_session_factory(
+    config: Config,
+    receive_budget: Arc<crate::msgr::budget::ReceiveBudget>,
+) -> SessionFactory {
     Arc::new(move |target: ActiveTarget| {
         let config = config.clone();
+        let receive_budget = Arc::clone(&receive_budget);
         let authority_source = authority_source_from_slot(Arc::clone(&config.authority_slot));
         Box::pin(async move {
+            let resources = crate::msgr::supervisor::ReceiveResources::new(receive_budget)?;
             let endpoint = target
                 .address
                 .endpoint()
@@ -713,10 +731,12 @@ fn production_session_factory(config: Config) -> SessionFactory {
                 })
             });
 
-            let machine = Session::spawn(
+            let machine = Session::spawn_reserved(
                 Machine::new(session_config(&config, target.address.clone())?)?,
                 Some(initial),
                 Some(connector),
+                None,
+                resources,
             );
             Ok(Arc::new(ManagedSession {
                 inner: Arc::new(machine),
@@ -864,6 +884,7 @@ mod tests {
             front,
             middle: Vec::new(),
             data: data.to_vec(),
+            ..Message::default()
         }
     }
 

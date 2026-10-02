@@ -8,6 +8,7 @@ const OBJECT_HASH_RJENKINS: u8 = 2;
 const POOL_TYPE_REPLICATED: u8 = 1;
 const POOL_TYPE_ERASURE: u8 = 3;
 const POOL_FLAG_HASHPSPOOL: u64 = 1 << 0;
+const POOL_FLAG_EC_OPTIMIZATIONS: u64 = 1 << 19;
 const DEFAULT_PRIMARY_AFFINITY: u32 = 0x1_0000;
 const CRUSH_ITEM_NONE: i32 = i32::MAX;
 
@@ -114,6 +115,11 @@ impl OSDMap {
             .ok_or(MapError::UnsupportedPlacement("pool does not exist"))?;
         if pool.pool_type != POOL_TYPE_REPLICATED && pool.pool_type != POOL_TYPE_ERASURE {
             return Err(MapError::UnsupportedPlacement("unsupported pool type"));
+        }
+        if pool.pool_type == POOL_TYPE_ERASURE && pool.flags & POOL_FLAG_EC_OPTIMIZATIONS != 0 {
+            return Err(MapError::UnsupportedPlacement(
+                "optimized erasure placement is not supported",
+            ));
         }
         if pool.size == 0 {
             return Err(MapError::UnsupportedPlacement("pool has zero replicas"));
@@ -560,6 +566,24 @@ mod tests {
         encoder.u32(100);
         encoder.u32(100);
         encoder.finish().expect("encode CRUSH")
+    }
+
+    #[test]
+    fn optimized_erasure_placement_is_rejected_before_shard_routing() {
+        let mut pool = test_pool(2, POOL_TYPE_ERASURE, 2);
+        pool.flags |= POOL_FLAG_EC_OPTIMIZATIONS;
+        let map = test_osd_map(
+            pool,
+            vec![3; 4],
+            vec![0x1_0000; 4],
+            encode_placement_crush_map(4),
+        );
+        assert_eq!(
+            map.place_raw_hash(2, 9),
+            Err(MapError::UnsupportedPlacement(
+                "optimized erasure placement is not supported"
+            ))
+        );
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
@@ -6,6 +7,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
+use super::budget::{ReceiveBudget, ReceiveCharge};
 use super::frame::{CrcCodec, Frame, Limits};
 use super::secure::{SecureCodec, SecureDecoder, SecureEncoder};
 use super::session::SessionError;
@@ -77,12 +79,34 @@ impl Decoder {
         &mut self,
         reader: &mut (impl AsyncRead + Unpin),
         limits: Limits,
-    ) -> Result<Frame, SessionError> {
-        match self {
-            Self::Crc(codec) => codec.read_async(reader, limits).await,
-            Self::Secure(codec) => codec.read(reader, limits).await,
+        budget: Option<&ReceiveBudget>,
+    ) -> Result<(Frame, ReceiveCharge), SessionError> {
+        let mut charge = ReceiveCharge::default();
+        let mut denied = false;
+        let reserve = |tag, bytes| {
+            if let Some(budget) = budget {
+                match budget.reserve(tag, bytes) {
+                    Ok(reservation) => charge = reservation,
+                    Err(error) => {
+                        denied = true;
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(())
+        };
+        let frame = match self {
+            Self::Crc(codec) => codec.read_reserved(reader, limits, reserve).await,
+            Self::Secure(codec) => codec.read_reserved(reader, limits, reserve).await,
         }
-        .map_err(SessionError::Frame)
+        .map_err(|error| {
+            if denied {
+                SessionError::QueueSaturated
+            } else {
+                SessionError::Frame(error)
+            }
+        })?;
+        Ok((frame, charge))
     }
 }
 
@@ -91,6 +115,7 @@ pub(crate) enum Event {
     Frame {
         generation: u64,
         frame: Frame,
+        charge: ReceiveCharge,
     },
     WriteComplete {
         generation: u64,
@@ -128,6 +153,26 @@ impl Connection {
         limits: Limits,
         events: mpsc::Sender<Event>,
     ) -> Self {
+        Self::spawn_budgeted(
+            generation,
+            stream,
+            codec,
+            renewal_after,
+            limits,
+            events,
+            None,
+        )
+    }
+
+    pub(crate) fn spawn_budgeted(
+        generation: u64,
+        stream: Box<dyn IoStream>,
+        codec: Codec,
+        renewal_after: Option<Duration>,
+        limits: Limits,
+        events: mpsc::Sender<Event>,
+        budget: Option<Arc<ReceiveBudget>>,
+    ) -> Self {
         let (mut reader, mut writer) = tokio::io::split(stream);
         let (mut encoder, mut decoder) = codec.split();
         let (write_tx, mut write_rx) = mpsc::channel::<Write>(1);
@@ -147,17 +192,17 @@ impl Connection {
                         }
                         return;
                     }
-                    result = decoder.read(&mut reader, limits) => result,
+                    result = decoder.read(&mut reader, limits, budget.as_deref()) => result,
                 };
                 match result {
-                    Ok(frame) => {
+                    Ok((frame, charge)) => {
                         tokio::select! {
                             biased;
                             changed = reader_close.changed() => {
                                 let _ = changed;
                                 return;
                             }
-                            result = reader_events.send(Event::Frame { generation, frame }) => {
+                            result = reader_events.send(Event::Frame { generation, frame, charge }) => {
                                 if result.is_err() {
                                     return;
                                 }
@@ -418,6 +463,7 @@ mod tests {
         let Event::Frame {
             generation,
             frame: decoded,
+            ..
         } = event_rx.recv().await.expect("frame event")
         else {
             panic!("expected frame");
@@ -464,6 +510,92 @@ mod tests {
             })
         ));
         assert!(event_rx.try_recv().is_err());
+        connection.close().await;
+    }
+
+    #[tokio::test]
+    async fn receive_budget_rejects_crc_and_secure_before_payload_reads() {
+        for secure in [false, true] {
+            let mut message = frame(&[7; 100]);
+            message.tag = Tag::Message;
+            let (wire, codec) = if secure {
+                let secret = [9; 64];
+                let mut server = SecureCodec::new(&secret, true).unwrap();
+                (
+                    server.encode(&message, LIMITS).unwrap(),
+                    Codec::Secure(Box::new(SecureCodec::new(&secret, false).unwrap())),
+                )
+            } else {
+                let codec = CrcCodec {
+                    with_data_crc: true,
+                };
+                (codec.encode(&message, LIMITS).unwrap(), Codec::Crc(codec))
+            };
+            let remaining = wire.len()
+                - if secure {
+                    96
+                } else {
+                    super::super::frame::PREAMBLE_SIZE
+                };
+            let stream = FaultStream::with_read(wire);
+            let observer = stream.clone();
+            let (events, mut received) = mpsc::channel(2);
+            let budget = ReceiveBudget::new(1, 1).unwrap();
+            let connection = Connection::spawn_budgeted(
+                1,
+                Box::new(stream),
+                codec,
+                None,
+                LIMITS,
+                events,
+                Some(budget),
+            );
+            assert!(matches!(
+                received.recv().await,
+                Some(Event::Fault {
+                    error: SessionError::QueueSaturated,
+                    ..
+                })
+            ));
+            assert_eq!(observer.0.lock().unwrap().reads.len(), remaining);
+            connection.close().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_budget_follows_queued_event_and_shared_message_lifetime() {
+        let codec = CrcCodec {
+            with_data_crc: true,
+        };
+        let mut message = frame(b"retained");
+        message.tag = Tag::Message;
+        let wire = codec.encode(&message, LIMITS).unwrap();
+        let budget = ReceiveBudget::new(1, wire.len() * 5).unwrap();
+        let (events, mut received) = mpsc::channel(2);
+        let connection = Connection::spawn_budgeted(
+            1,
+            Box::new(FaultStream::with_read(wire)),
+            Codec::Crc(codec),
+            None,
+            LIMITS,
+            events,
+            Some(Arc::clone(&budget)),
+        );
+        let event = received.recv().await.unwrap();
+        assert!(budget.reserve(Tag::Message, 1).is_err());
+        assert!(budget.reserve(Tag::Ack, 32).is_ok());
+        let Event::Frame { charge, .. } = event else {
+            panic!("expected charged frame")
+        };
+        let retained = crate::msgr::message::Message {
+            receive_charge: charge,
+            ..crate::msgr::message::Message::default()
+        };
+        let clone = retained.clone();
+        drop(retained);
+        assert!(budget.reserve(Tag::Message, 1).is_err());
+        drop(clone);
+        assert!(budget.reserve(Tag::Message, 1).is_ok());
         connection.close().await;
     }
 

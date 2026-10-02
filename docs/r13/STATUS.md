@@ -102,8 +102,43 @@ Frozen fuzz identity constants:
 - These are local implementation improvements, not R13 certification.
   Fresh source-bound fuzz, four-platform checks, 24-hour secure/actual-CRC
   soak with authorized churn, and detached human approvals remain required.
-  PG-indexed backoffs, whole-map copy-on-write, aggregate receive/session
-  limits, and broader map-driven recovery have not been implemented here.
+- Additional local recovery and resource improvements adapted after the Go
+  recheck at `576ce5e0009460ef44ccf71a9260b97667b23334`:
+  admitted submissions are indexed by PG, and matching UNBLOCK ranges cancel
+  and resubmit them with the same transaction/front identity. A completed
+  reply wins cancellation; mutation uncertainty survives later errors.
+  Ordinary object operations observe published route changes (PG, primary,
+  shard, sharded mode, addresses). Valid but unavailable primary routes wait
+  under the operation's deadline/cancellation instead of immediately failing
+  or consuming transport-attempt slots. Invalid placement fails immediately.
+- Optimized erasure pools (`POOL_FLAG_EC_OPTIMIZATIONS`, bit 19) fail closed
+  before shard routing. Primary-first optimized-EC translation is not
+  implemented; ordinary certified erasure placement is unchanged.
+- Production MON, OSD, and MGR sessions share a client-owned ceiling of 256
+  sessions and 256 MiB of aggregate charged receive capacity. Session slots
+  are acquired before dialing and retained through owner shutdown. Validated
+  CRC descriptors or an authenticated Secure fixed preamble reserve five
+  times the complete encoded frame size before variable body allocations.
+  Reservations survive transport queues, incoming messages, and shared
+  message clones until the last holder drops. Local exhaustion is terminal
+  saturation rather than corrupt-wire evidence or a reconnect loop.
+  A separate 4 MiB charged control pool permits bounded control progress
+  under data exhaustion. These limits conservatively cover internal decode
+  copy peaks, not total process RSS, arbitrary application-owned results,
+  maps, or fixed preamble/authentication buffers. Existing handshake/frame
+  limits still apply, and no public receive-budget tuning API was added.
+- Focused regressions cover admitted read/mutation resubmission, published
+  map observation, deadline-bound missing routes, dispatched-mutation
+  cancellation, pre-body CRC/Secure refusal, retained-charge lifetimes,
+  independent controls, and session-slot release after shutdown.
+  Validation gates are workspace all-target tests and strict all-feature
+  workspace Clippy. No fresh live, fuzz, endurance, or performance result is
+  implied by these local checks; the frozen benchmark matrix is unchanged.
+- Remaining Go maturity gaps include selective active-backoff waiter indexes,
+  proactive cached-session retirement and same-address OSD generations,
+  broader watch/command remapping, component-level map copy-on-write,
+  ReadInto/copy-ownership APIs, public cluster-change subscriptions, and
+  sustained diagnostic benchmarks. They are not claimed implemented here.
 - `rados-r13-qualify` will refuse to sign off on any report whose runtime
   observations do not match its claims. The current single-host run
   therefore cannot produce a `passed` report until every required

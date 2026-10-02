@@ -116,5 +116,6 @@ fn segmented_message(
         front: front.to_vec(),
         middle: middle.to_vec(),
         data: body.to_vec(),
+        ..Message::default()
     })
 }

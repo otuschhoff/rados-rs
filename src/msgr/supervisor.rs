@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard, Semaphore, SemaphorePermit, mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
+use super::budget::ReceiveBudget;
 use super::control::Control;
 use super::message::{MESSAGE_HEADER_SIZE, Message};
 use super::session::MAX_CONTROL_MESSAGES;
@@ -26,6 +27,21 @@ pub(crate) struct ConnectionSetup {
 pub(crate) type ConnectFuture =
     Pin<Box<dyn Future<Output = Result<ConnectionSetup, SessionError>> + Send>>;
 pub(crate) type Connector = Arc<dyn Fn() -> ConnectFuture + Send + Sync>;
+
+pub(crate) struct ReceiveResources {
+    pub(crate) budget: Arc<ReceiveBudget>,
+    _session: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl ReceiveResources {
+    pub(crate) fn new(budget: Arc<ReceiveBudget>) -> Result<Self, SessionError> {
+        let session = budget.admit().map_err(|_| SessionError::QueueSaturated)?;
+        Ok(Self {
+            budget,
+            _session: session,
+        })
+    }
+}
 
 enum Command {
     Admit {
@@ -106,6 +122,26 @@ impl Session {
         connector: Option<Connector>,
         observed_modes: Option<Arc<ObservedModes>>,
     ) -> Self {
+        Self::spawn_inner(machine, initial, connector, observed_modes, None)
+    }
+
+    pub(crate) fn spawn_reserved(
+        machine: Machine,
+        initial: Option<ConnectionSetup>,
+        connector: Option<Connector>,
+        observed_modes: Option<Arc<ObservedModes>>,
+        resources: ReceiveResources,
+    ) -> Self {
+        Self::spawn_inner(machine, initial, connector, observed_modes, Some(resources))
+    }
+
+    fn spawn_inner(
+        machine: Machine,
+        initial: Option<ConnectionSetup>,
+        connector: Option<Connector>,
+        observed_modes: Option<Arc<ObservedModes>>,
+        resources: Option<ReceiveResources>,
+    ) -> Self {
         let capacity = machine.queue_limit();
         let retained_limit = machine.retained_limit();
         let (capacity_tx, capacity_rx) = watch::channel(machine.snapshot());
@@ -127,6 +163,7 @@ impl Session {
                 terminal: terminal_tx,
                 stop: stop_rx,
                 capacity: capacity_tx,
+                resources,
             },
             observed_modes,
         ));
@@ -559,6 +596,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn receive_session_capacity_is_released_after_owner_shutdown() {
+        let budget = ReceiveBudget::new(1, 1024).unwrap();
+        let resources = ReceiveResources::new(Arc::clone(&budget)).unwrap();
+        let (client, _server) = duplex(1024);
+        let session =
+            Session::spawn_reserved(machine(1), Some(setup(client)), None, None, resources);
+        assert!(matches!(
+            ReceiveResources::new(Arc::clone(&budget)),
+            Err(SessionError::QueueSaturated)
+        ));
+        session.shutdown().await;
+        assert!(ReceiveResources::new(budget).is_ok());
+    }
+
+    #[tokio::test]
     async fn reserved_control_admission_bypasses_full_application_commands() {
         let (client, _server) = duplex(1);
         let session = Session::spawn(machine(1), Some(setup(client)), None);
@@ -880,6 +932,7 @@ mod tests {
             dropped_events: 0,
             unreported_dropped_events: 0,
             observed_modes: None,
+            resources: None,
         };
 
         owner.emit_event(SessionEvent::KeepaliveAck);
@@ -942,6 +995,7 @@ mod tests {
             dropped_events: 0,
             unreported_dropped_events: 0,
             observed_modes: Some(Arc::clone(&observed)),
+            resources: None,
         };
         let before = owner.machine.snapshot();
         owner
@@ -1001,6 +1055,7 @@ struct Owner {
     dropped_events: u64,
     unreported_dropped_events: u64,
     observed_modes: Option<Arc<ObservedModes>>,
+    resources: Option<ReceiveResources>,
 }
 
 struct OwnerChannels {
@@ -1011,6 +1066,7 @@ struct OwnerChannels {
     terminal: watch::Sender<Option<SessionError>>,
     stop: watch::Receiver<bool>,
     capacity: watch::Sender<Snapshot>,
+    resources: Option<ReceiveResources>,
 }
 
 async fn run_owner(
@@ -1028,6 +1084,7 @@ async fn run_owner(
         terminal,
         mut stop,
         capacity: capacity_tx,
+        resources,
     } = channels;
     let capacity = machine.queue_limit();
     let (transport_events, mut transport_rx) = mpsc::channel(capacity);
@@ -1048,6 +1105,7 @@ async fn run_owner(
         dropped_events: 0,
         unreported_dropped_events: 0,
         observed_modes,
+        resources,
     };
 
     if let Some(setup) = initial {
@@ -1115,14 +1173,18 @@ async fn run_owner(
         });
     }
 
-    let _ = owner.connector_stop.send(true);
-    if let Some((_, connection)) = owner.connection.take() {
-        connection.close().await;
-    }
-    while owner.connectors.join_next().await.is_some() {}
+    owner.shutdown().await;
 }
 
 impl Owner {
+    async fn shutdown(&mut self) {
+        let _ = self.connector_stop.send(true);
+        if let Some((_, connection)) = self.connection.take() {
+            connection.close().await;
+        }
+        while self.connectors.join_next().await.is_some() {}
+    }
+
     async fn command(&mut self, command: Command) {
         match command {
             Command::Admit {
@@ -1173,13 +1235,20 @@ impl Owner {
 
     async fn transport_event(&mut self, event: TransportEvent) {
         let input = match event {
-            TransportEvent::Frame { generation, frame } => {
+            TransportEvent::Frame {
+                generation,
+                frame,
+                charge,
+            } => {
                 if frame.tag == super::frame::Tag::Message {
                     match Message::decode(&frame, self.machine.limits()) {
-                        Ok(message) => Input::Message {
-                            generation,
-                            message,
-                        },
+                        Ok(mut message) => {
+                            message.receive_charge = charge;
+                            Input::Message {
+                                generation,
+                                message,
+                            }
+                        }
                         Err(error) => Input::Fault {
                             generation,
                             error: SessionError::Frame(error),
@@ -1245,13 +1314,16 @@ impl Owner {
         }
         self.connection = Some((
             generation,
-            Connection::spawn(
+            Connection::spawn_budgeted(
                 generation,
                 setup.stream,
                 setup.codec,
                 setup.renewal_after,
                 self.machine.limits(),
                 self.transport_events.clone(),
+                self.resources
+                    .as_ref()
+                    .map(|resources| Arc::clone(&resources.budget)),
             ),
         ));
     }

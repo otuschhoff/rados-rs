@@ -205,6 +205,7 @@ pub fn fuzz_map_message(kind: u8, data: &[u8]) {
         front: data.to_vec(),
         middle: Vec::new(),
         data: Vec::new(),
+        ..Message::default()
     };
     if osdmap {
         if let Ok(batch) = decode_osdmap_batch(

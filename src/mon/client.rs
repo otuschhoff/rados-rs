@@ -315,6 +315,10 @@ impl MonitorClient {
         self.state.borrow().clone()
     }
 
+    pub(crate) fn changes(&self) -> watch::Receiver<Arc<MonitorState>> {
+        self.state.clone()
+    }
+
     pub(crate) async fn history(&self) -> Vec<Arc<MonitorState>> {
         self.history.lock().await.iter().cloned().collect()
     }
@@ -1546,6 +1550,7 @@ pub(crate) fn authenticated_session_factory(
     session_config: SessionConfig,
     connect_timeout: Duration,
     authority_slot: Arc<std::sync::RwLock<Option<Arc<crate::cephx::connector::MonitorConnector>>>>,
+    receive_budget: Arc<crate::msgr::budget::ReceiveBudget>,
 ) -> SessionFactory {
     use crate::cephx::connector::MonitorConnector;
 
@@ -1555,7 +1560,9 @@ pub(crate) fn authenticated_session_factory(
         let mut session_config = session_config.clone();
         session_config.client_ident.target_address = endpoint.entity_address.clone();
         let authority_slot = Arc::clone(&authority_slot);
+        let receive_budget = Arc::clone(&receive_budget);
         Box::pin(async move {
+            let resources = crate::msgr::supervisor::ReceiveResources::new(receive_budget)?;
             if connect_timeout.is_zero() {
                 return Err(MonitorError::InvalidConfig);
             }
@@ -1603,7 +1610,13 @@ pub(crate) fn authenticated_session_factory(
             let client_addresses = session_config.client_ident.addresses.clone();
             let machine = Machine::new(session_config)?;
             Ok(OpenedMonitorSession {
-                session: Arc::new(Session::spawn(machine, Some(initial), Some(connector))),
+                session: Arc::new(Session::spawn_reserved(
+                    machine,
+                    Some(initial),
+                    Some(connector),
+                    None,
+                    resources,
+                )),
                 global_id,
                 client_addresses,
             })
@@ -1612,7 +1625,7 @@ pub(crate) fn authenticated_session_factory(
 }
 
 #[cfg(all(test, not(rados_packaged_source)))]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1999,7 +2012,7 @@ mod tests {
         );
     }
 
-    fn empty_incremental(fsid: Fsid, epoch: u32, full_crc: u32) -> Vec<u8> {
+    pub(crate) fn empty_incremental(fsid: Fsid, epoch: u32, full_crc: u32) -> Vec<u8> {
         let mut encoder = Encoder::new(64 << 10);
         encoder.versioned(8, 7, |wrapper| {
             wrapper.versioned(9, 1, |client| {

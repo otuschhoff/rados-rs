@@ -121,5 +121,6 @@ fn split_message(data: &[u8]) -> Option<Message> {
         front: data[front_start..middle_start].to_vec(),
         middle: data[middle_start..body_start].to_vec(),
         data: data[body_start..].to_vec(),
+        ..Message::default()
     })
 }

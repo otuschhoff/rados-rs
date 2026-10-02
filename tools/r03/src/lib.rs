@@ -41,6 +41,12 @@ mod msgr {
             "/../../src/msgr/banner.rs"
         ));
     }
+    pub(crate) mod budget {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../src/msgr/budget.rs"
+        ));
+    }
     pub(crate) mod control {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -109,6 +115,7 @@ const RUST_SOURCE_FILES: &[&str] = &[
     "src/protocol/address.rs",
     "src/protocol/features.rs",
     "src/msgr/banner.rs",
+    "src/msgr/budget.rs",
     "src/msgr/control.rs",
     "src/msgr/frame.rs",
     "src/msgr/message.rs",

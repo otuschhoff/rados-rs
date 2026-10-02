@@ -1156,7 +1156,7 @@ impl Client {
         let factory = self.0.manager_factory.clone();
         #[cfg(not(test))]
         let factory = None;
-        ManagerClient::new(config, factory)
+        ManagerClient::new_with_budget(config, factory, self.0.objecter.receive_budget())
             .map_err(|error| map_manager_error(error, "Client::manager_command"))
     }
 
@@ -1248,6 +1248,7 @@ impl Client {
                 session_config,
                 self.0.config.dial_timeout(),
                 Arc::clone(&self.0.authority),
+                self.0.objecter.receive_budget(),
             )
         });
         #[cfg(not(test))]
@@ -1256,6 +1257,7 @@ impl Client {
             session_config,
             self.0.config.dial_timeout(),
             Arc::clone(&self.0.authority),
+            self.0.objecter.receive_budget(),
         );
         Ok((
             MonitorConfig {

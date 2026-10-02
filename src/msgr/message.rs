@@ -31,14 +31,27 @@ pub(crate) struct MessageLengths {
     pub(crate) data: u32,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Message {
     pub(crate) header: MessageHeader,
     pub(crate) lengths: MessageLengths,
     pub(crate) front: Vec<u8>,
     pub(crate) middle: Vec<u8>,
     pub(crate) data: Vec<u8>,
+    pub(crate) receive_charge: super::budget::ReceiveCharge,
 }
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.lengths == other.lengths
+            && self.front == other.front
+            && self.middle == other.middle
+            && self.data == other.data
+    }
+}
+
+impl Eq for Message {}
 
 impl MessageHeader {
     pub(crate) fn encode(self) -> [u8; MESSAGE_HEADER_SIZE] {
@@ -161,6 +174,7 @@ impl Message {
             front,
             middle,
             data,
+            receive_charge: super::budget::ReceiveCharge::default(),
         })
     }
 }
@@ -240,6 +254,7 @@ mod tests {
             front: b"front".to_vec(),
             middle: b"middle".to_vec(),
             data: vec![0, 1, 2, 3],
+            ..Message::default()
         };
         let frame = message.clone().encode(TEST_LIMITS).expect("valid message");
         assert_eq!(

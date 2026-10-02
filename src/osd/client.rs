@@ -157,6 +157,11 @@ enum AdmissionOutcome {
     Reply(Message),
 }
 
+enum SubmissionResult {
+    Reply(Message),
+    Resend { uncertain: bool },
+}
+
 struct SessionEntry {
     endpoint: SocketAddr,
     authority: Arc<MonitorConnector>,
@@ -166,7 +171,110 @@ struct SessionEntry {
 #[derive(Default)]
 struct OSDSessionState {
     backoffs: HashMap<u64, Backoff>,
+    next_submission: u64,
+    submissions: Arc<Mutex<HashMap<PG, HashMap<u64, Submission>>>>,
     failure: Option<Error>,
+}
+
+impl OSDSessionState {
+    fn unblock(&mut self, backoff: &Backoff) {
+        self.backoffs.remove(&backoff.id);
+        let mut submissions = self
+            .submissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entries) = submissions.get_mut(&backoff.pg) {
+            for submission in entries
+                .values_mut()
+                .filter(|entry| backoff.contains(&entry.object))
+            {
+                if let Some(resend) = submission.resend.take() {
+                    let _ = resend.send(());
+                }
+            }
+        }
+    }
+}
+
+struct Submission {
+    object: HObject,
+    resend: Option<oneshot::Sender<()>>,
+}
+
+struct SubmissionGuard {
+    submissions: Arc<Mutex<HashMap<PG, HashMap<u64, Submission>>>>,
+    pg: PG,
+    id: u64,
+}
+
+struct RouteContext<'a> {
+    monitor: &'a MonitorClient,
+    target: &'a Target,
+    hash: Option<u32>,
+    signature: (PG, i32, i8, bool, EntityAddrVec),
+}
+
+impl RouteContext<'_> {
+    async fn changed(&self) {
+        wait_for_route_change(self.monitor, &self.signature, |state| {
+            state.osdmap().and_then(|map| {
+                let placement = self
+                    .hash
+                    .map_or_else(
+                        || {
+                            map.place_object(
+                                self.target.pool_id,
+                                &self.target.object,
+                                &self.target.locator,
+                                &self.target.namespace,
+                            )
+                        },
+                        |hash| map.place_raw_hash(self.target.pool_id, hash),
+                    )
+                    .ok()?;
+                Some((
+                    placement.pg,
+                    placement.acting_primary,
+                    placement.primary_shard,
+                    placement.sharded,
+                    map.osd_client_addresses(placement.acting_primary)?.clone(),
+                ))
+            })
+        })
+        .await;
+    }
+}
+
+async fn wait_for_route_change<Signature: PartialEq>(
+    monitor: &MonitorClient,
+    expected: &Signature,
+    resolve: impl Fn(&crate::mon::client::MonitorState) -> Option<Signature>,
+) {
+    let mut changes = monitor.changes();
+    loop {
+        let state = changes.borrow_and_update().clone();
+        if resolve(&state).as_ref() != Some(expected) || monitor.terminal().is_some() {
+            return;
+        }
+        if changes.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+impl Drop for SubmissionGuard {
+    fn drop(&mut self) {
+        let mut submissions = self
+            .submissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entries) = submissions.get_mut(&self.pg) {
+            entries.remove(&self.id);
+            if entries.is_empty() {
+                submissions.remove(&self.pg);
+            }
+        }
+    }
 }
 
 struct OSDSession {
@@ -204,6 +312,7 @@ pub(crate) struct Client {
     allow_crc: bool,
     address_nonce: u32,
     observed_modes: Arc<ObservedModes>,
+    receive_budget: Arc<crate::msgr::budget::ReceiveBudget>,
 }
 
 impl Client {
@@ -240,11 +349,16 @@ impl Client {
             allow_crc,
             address_nonce,
             observed_modes: Arc::new(ObservedModes::default()),
+            receive_budget: crate::msgr::budget::ReceiveBudget::defaults(),
         }
     }
 
     pub(crate) fn observed_connection_modes(&self) -> (bool, bool) {
         self.observed_modes.snapshot()
+    }
+
+    pub(crate) fn receive_budget(&self) -> Arc<crate::msgr::budget::ReceiveBudget> {
+        Arc::clone(&self.receive_budget)
     }
 
     pub(crate) async fn read(
@@ -763,26 +877,10 @@ impl Client {
                 return Err(preserve_unknown(Error::Closed, prior_unknown));
             }
             check_options(options).map_err(|error| preserve_unknown(error, prior_unknown))?;
-            let state = monitor.snapshot();
-            let map = state
-                .osdmap()
-                .ok_or_else(|| preserve_unknown(Error::NotConnected, prior_unknown))?;
-            let placement = route_hash
-                .map_or_else(
-                    || {
-                        map.place_object(
-                            target.pool_id,
-                            &target.object,
-                            &target.locator,
-                            &target.namespace,
-                        )
-                    },
-                    |hash| map.place_raw_hash(target.pool_id, hash),
-                )
-                .map_err(|_| preserve_unknown(Error::NoPrimary, prior_unknown))?;
-            if placement.acting_primary < 0 {
-                return Err(preserve_unknown(Error::NoPrimary, prior_unknown));
-            }
+            let (state, placement) = wait_for_usable_route(monitor, &target, route_hash, options)
+                .await
+                .map_err(|error| preserve_unknown(error, prior_unknown))?;
+            let map = state.osdmap().ok_or(Error::NotConnected)?;
             let addresses = map
                 .osd_client_addresses(placement.acting_primary)
                 .ok_or_else(|| preserve_unknown(Error::NoPrimary, prior_unknown))?;
@@ -790,6 +888,18 @@ impl Client {
                 flags |= FLAG_RETRY;
             }
             let session = self.session(placement.acting_primary, addresses)?;
+            let route = RouteContext {
+                monitor,
+                target: &target,
+                hash: route_hash,
+                signature: (
+                    placement.pg,
+                    placement.acting_primary,
+                    placement.primary_shard,
+                    placement.sharded,
+                    addresses.clone(),
+                ),
+            };
             let global_id = self
                 .authority
                 .read()
@@ -839,7 +949,14 @@ impl Client {
                     .map_or(attempt_deadline, |deadline| deadline.min(attempt_deadline)),
             );
             let reply_message = match session
-                .submit(placement.pg, &object, message, mutation, &attempt_options)
+                .submit_routed(
+                    placement.pg,
+                    &object,
+                    message,
+                    mutation,
+                    &attempt_options,
+                    Some(&route),
+                )
                 .await
             {
                 Ok(reply) => reply,
@@ -1190,6 +1307,8 @@ impl Client {
         target_address: EntityAddr,
         endpoint: SocketAddr,
     ) -> Result<Arc<OSDSession>, Error> {
+        let resources = crate::msgr::supervisor::ReceiveResources::new(self.receive_budget())
+            .map_err(map_session_error)?;
         let service = Arc::new(
             ServiceConnector::new(ServiceConfig {
                 authority: Arc::clone(authority),
@@ -1251,11 +1370,12 @@ impl Client {
         })
         .map_err(map_session_error)?;
         Ok(OSDSession::spawn(
-            Arc::new(Session::spawn_observed(
+            Arc::new(Session::spawn_reserved(
                 machine,
                 None,
                 Some(connector),
                 Some(Arc::clone(&self.observed_modes)),
+                resources,
             )),
             self.notifications.clone(),
             self.message_limits,
@@ -1424,53 +1544,113 @@ impl OSDSession {
         mutation: bool,
         options: &OperationOptions,
     ) -> Result<Message, Error> {
-        loop {
-            if let Some(error) = self.state.lock().await.failure {
-                return Err(error);
-            }
-            let slot = match wait_for(self.raw.wait_for_capacity(&message), options).await {
-                Ok(slot) => slot,
-                Err(error) => return Err(self.state.lock().await.failure.unwrap_or(error)),
-            };
-            let state = self.state.lock().await;
-            if let Some(error) = state.failure {
-                return Err(error);
-            }
-            let blocked = state
-                .backoffs
-                .values()
-                .any(|backoff| backoff.pg == pg && backoff.contains(object));
-            if blocked {
-                let mut changed = self.changed.subscribe();
-                drop(state);
-                drop(slot);
-                wait_for_change(&mut changed, options).await?;
-                continue;
-            }
-            let admission =
-                admit_with_cancellation(&self.raw, message.clone(), options, mutation).await;
-            drop(slot);
-            let admission = match admission {
-                Err(Error::QueueSaturated) => {
+        self.submit_routed(pg, object, message, mutation, options, None)
+            .await
+    }
+
+    async fn submit_routed(
+        &self,
+        pg: PG,
+        object: &HObject,
+        message: Message,
+        mutation: bool,
+        options: &OperationOptions,
+        route: Option<&RouteContext<'_>>,
+    ) -> Result<Message, Error> {
+        let mut prior_unknown = None;
+        let result = async {
+            loop {
+                if let Some(error) = self.state.lock().await.failure {
+                    return Err(error);
+                }
+                let slot = match tokio::select! {
+                    result = wait_for(self.raw.wait_for_capacity(&message), options) => result,
+                    () = route_changed(route) => Err(Error::StaleMap),
+                } {
+                    Ok(slot) => slot,
+                    Err(error) => return Err(self.state.lock().await.failure.unwrap_or(error)),
+                };
+                let mut state = self.state.lock().await;
+                if let Some(error) = state.failure {
+                    return Err(error);
+                }
+                let blocked = state
+                    .backoffs
+                    .values()
+                    .any(|backoff| backoff.pg == pg && backoff.contains(object));
+                if blocked {
+                    let mut changed = self.changed.subscribe();
                     drop(state);
+                    drop(slot);
+                    tokio::select! {
+                        result = wait_for_change(&mut changed, options) => result?,
+                        () = route_changed(route) => return Err(Error::StaleMap),
+                    }
                     continue;
                 }
-                result => result?,
-            };
-            let AdmissionOutcome::Request(mut request) = admission else {
-                let AdmissionOutcome::Reply(reply) = admission else {
-                    unreachable!()
+                state.next_submission = state
+                    .next_submission
+                    .checked_add(1)
+                    .ok_or(Error::LimitExceeded)?;
+                let submission_id = state.next_submission;
+                let admission =
+                    admit_with_cancellation(&self.raw, message.clone(), options, mutation).await;
+                drop(slot);
+                let admission = match admission {
+                    Err(Error::QueueSaturated) => {
+                        drop(state);
+                        continue;
+                    }
+                    result => result?,
                 };
-                return Ok(reply);
-            };
-            request.cancel_on_drop();
-            drop(state);
-            let result = wait_for_request(&mut request, options, mutation).await;
-            if result.is_err() && self.state.lock().await.failure == Some(Error::StaleMap) {
-                return Err(Error::StaleMap);
+                let AdmissionOutcome::Request(mut request) = admission else {
+                    let AdmissionOutcome::Reply(reply) = admission else {
+                        unreachable!()
+                    };
+                    return Ok(reply);
+                };
+                request.cancel_on_drop();
+                let (resend, unblocked) = oneshot::channel();
+                let guard = SubmissionGuard {
+                    submissions: Arc::clone(&state.submissions),
+                    pg,
+                    id: submission_id,
+                };
+                state
+                    .submissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .entry(pg)
+                    .or_default()
+                    .insert(
+                        submission_id,
+                        Submission {
+                            object: object.clone(),
+                            resend: Some(resend),
+                        },
+                    );
+                drop(state);
+                let result =
+                    wait_for_submission(&mut request, unblocked, route, options, mutation).await;
+                drop(guard);
+                let result = match result {
+                    Ok(SubmissionResult::Resend { uncertain }) => {
+                        if mutation && uncertain {
+                            prior_unknown = Some(UnknownCause::Transport);
+                        }
+                        continue;
+                    }
+                    Ok(SubmissionResult::Reply(reply)) => Ok(reply),
+                    Err(error) => Err(error),
+                };
+                if result.is_err() && self.state.lock().await.failure == Some(Error::StaleMap) {
+                    return Err(Error::StaleMap);
+                }
+                return result;
             }
-            return result;
         }
+        .await;
+        result.map_err(|error| preserve_unknown(error, prior_unknown))
     }
 
     async fn submit_direct(
@@ -1692,7 +1872,7 @@ async fn receive_incoming(
                     current.backoffs.insert(backoff.id, backoff.clone());
                 }
                 BACKOFF_UNBLOCK => {
-                    current.backoffs.remove(&backoff.id);
+                    current.unblock(&backoff);
                 }
                 _ => unreachable!("decoder validates backoff operation"),
             }
@@ -1881,6 +2061,36 @@ async fn wait_for_request(
     }
 }
 
+async fn wait_for_submission(
+    request: &mut crate::msgr::supervisor::Request,
+    unblocked: oneshot::Receiver<()>,
+    route: Option<&RouteContext<'_>>,
+    options: &OperationOptions,
+    mutation: bool,
+) -> Result<SubmissionResult, Error> {
+    tokio::select! {
+        biased;
+        result = wait_for_request(request, options, mutation) => result.map(SubmissionResult::Reply),
+        () = route_changed(route) => match request.cancel().await {
+            Ok(Some(reply)) => Ok(SubmissionResult::Reply(reply)),
+            Ok(None) => Err(Error::MalformedReply),
+            Err(SessionError::Cancelled) => Err(Error::StaleMap),
+            Err(SessionError::OutcomeUnknown) if !mutation => Err(Error::StaleMap),
+            Err(error) => Err(map_request_error(error, mutation)),
+        },
+        unblocked = unblocked => {
+            unblocked.map_err(|_| Error::NotConnected)?;
+            match request.cancel().await {
+                Ok(Some(reply)) => Ok(SubmissionResult::Reply(reply)),
+                Err(SessionError::Cancelled) => Ok(SubmissionResult::Resend { uncertain: false }),
+                Err(SessionError::OutcomeUnknown) => Ok(SubmissionResult::Resend { uncertain: true }),
+                Ok(None) => Err(Error::MalformedReply),
+                Err(error) => Err(map_request_error(error, mutation)),
+            }
+        }
+    }
+}
+
 fn classify_cancel(
     result: Result<Option<Message>, SessionError>,
     cause: UnknownCause,
@@ -1950,6 +2160,78 @@ async fn best_effort_refresh_map(
     match refresh_map(monitor, epoch, &bounded).await {
         Err(Error::Cancelled) => Err(Error::Cancelled),
         _ => check_options(options),
+    }
+}
+
+async fn wait_for_usable_route(
+    monitor: &MonitorClient,
+    target: &Target,
+    hash: Option<u32>,
+    options: &OperationOptions,
+) -> Result<
+    (
+        Arc<crate::mon::client::MonitorState>,
+        crate::maps::ObjectPlacement,
+    ),
+    Error,
+> {
+    wait_for_resolved_route(monitor, options, |map| {
+        hash.map_or_else(
+            || {
+                map.place_object(
+                    target.pool_id,
+                    &target.object,
+                    &target.locator,
+                    &target.namespace,
+                )
+            },
+            |hash| map.place_raw_hash(target.pool_id, hash),
+        )
+        .map_err(|_| Error::NoPrimary)
+    })
+    .await
+}
+
+async fn route_changed(route: Option<&RouteContext<'_>>) {
+    match route {
+        Some(route) => route.changed().await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+async fn wait_for_resolved_route(
+    monitor: &MonitorClient,
+    options: &OperationOptions,
+    resolve: impl Fn(&crate::maps::OSDMap) -> Result<crate::maps::ObjectPlacement, Error>,
+) -> Result<
+    (
+        Arc<crate::mon::client::MonitorState>,
+        crate::maps::ObjectPlacement,
+    ),
+    Error,
+> {
+    loop {
+        check_options(options)?;
+        if monitor.terminal().is_some() {
+            return Err(Error::NotConnected);
+        }
+        let state = monitor.snapshot();
+        let map = state.osdmap().ok_or(Error::NotConnected)?;
+        let placement = resolve(&map)?;
+        if placement.acting_primary >= 0
+            && map
+                .osd_client_addresses(placement.acting_primary)
+                .is_some_and(|addresses| {
+                    addresses.0.iter().any(|address| {
+                        address
+                            .endpoint()
+                            .is_some_and(|endpoint| endpoint.port() != 0)
+                    })
+                })
+        {
+            return Ok((state, placement));
+        }
+        best_effort_refresh_map(monitor, map.epoch(), options).await?;
     }
 }
 
@@ -2841,6 +3123,148 @@ mod tests {
         assert!(target.write_snapshots.is_empty());
     }
 
+    fn unavailable_placement() -> crate::maps::ObjectPlacement {
+        let pg = backoff(BACKOFF_BLOCK).pg;
+        crate::maps::ObjectPlacement {
+            raw_hash: 7,
+            raw_pg: pg,
+            pg,
+            placement_seed: 7,
+            raw: Vec::new(),
+            up: Vec::new(),
+            up_primary: -1,
+            acting: Vec::new(),
+            acting_primary: -1,
+            primary_shard: 0,
+            sharded: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn published_map_changes_wake_observers_but_missing_addresses_remain_unusable() {
+        let (monitor, handle, map, _, bytes) = start_monitor_with_fixture_map().await;
+        let epoch = map.epoch();
+        let mut observer = Box::pin(wait_for_route_change(&monitor, &epoch, |state| {
+            state.osdmap().map(|map| map.epoch())
+        }));
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[],
+                &[(map.epoch(), bytes)],
+                map.epoch(),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), observer.as_mut())
+                .await
+                .is_err()
+        );
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_millis(30));
+        let ready = wait_for_resolved_route(&monitor, &options, |current| {
+            let mut placement = unavailable_placement();
+            if current.epoch() > map.epoch() {
+                placement.acting_primary = 0;
+            }
+            Ok(placement)
+        });
+        let incremental_bytes =
+            crate::mon::client::tests::empty_incremental(map.fsid(), map.epoch() + 1, 123);
+        let incremental =
+            crate::maps::decode_osdmap_incremental(&incremental_bytes, map_limits()).unwrap();
+        handle
+            .incoming
+            .send(osdmap_message(
+                map.fsid(),
+                &[(incremental.epoch(), incremental_bytes)],
+                &[],
+                incremental.epoch(),
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), observer)
+            .await
+            .unwrap();
+        assert_eq!(
+            monitor.snapshot().osdmap().unwrap().epoch(),
+            incremental.epoch()
+        );
+        assert!(matches!(ready.await, Err(Error::Timeout)));
+        monitor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn obsolete_route_cancels_dispatched_reads_and_preserves_mutation_uncertainty() {
+        let (monitor, _handle, _, _, _) = start_monitor_with_fixture_map().await;
+        let target = Target {
+            pool_id: 1,
+            object: b"object".to_vec(),
+            locator: Vec::new(),
+            namespace: Vec::new(),
+            snapshot: 0,
+            snapshot_sequence: 0,
+            write_snapshots: Vec::new(),
+        };
+        let route = RouteContext {
+            monitor: &monitor,
+            target: &target,
+            hash: None,
+            signature: (
+                backoff(BACKOFF_BLOCK).pg,
+                -1,
+                0,
+                false,
+                EntityAddrVec(Vec::new()),
+            ),
+        };
+        for mutation in [false, true] {
+            let (client, mut server) = duplex(8192);
+            let raw = raw_session(client);
+            let mut request = raw.admit(request_message(), false).await.unwrap();
+            next_message(&mut server).await;
+            let (_unblock, receiver) = oneshot::channel();
+            let options = OperationOptions::new()
+                .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+            let result =
+                wait_for_submission(&mut request, receiver, Some(&route), &options, mutation).await;
+            assert!(
+                matches!(result, Err(error) if error == if mutation { Error::OutcomeUnknown(UnknownCause::Transport) } else { Error::StaleMap })
+            );
+            raw.shutdown().await;
+        }
+        monitor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn no_primary_wait_uses_operation_deadline_and_rejects_invalid_profiles() {
+        let (monitor, _handle, _, _, _) = start_monitor_with_fixture_map().await;
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_millis(30));
+        let checks = AtomicU64::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            wait_for_resolved_route(&monitor, &options, |_| {
+                checks.fetch_add(1, Ordering::Relaxed);
+                Ok(unavailable_placement())
+            }),
+        )
+        .await
+        .expect("no-primary wait must be bounded");
+        assert!(matches!(result, Err(Error::Timeout)));
+        assert!(checks.load(Ordering::Relaxed) > 0);
+        let options = OperationOptions::new()
+            .with_deadline(std::time::Instant::now() + Duration::from_secs(1));
+        assert!(matches!(
+            wait_for_resolved_route(&monitor, &options, |_| Err(Error::NoPrimary)).await,
+            Err(Error::NoPrimary)
+        ));
+        monitor.close();
+        monitor.shutdown().await;
+    }
+
     fn address() -> EntityAddr {
         EntityAddr::ipv4_v2(SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::new(192, 0, 2, 1),
@@ -3227,6 +3651,78 @@ mod tests {
             b"ok"
         );
         session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn backoff_unblock_resubmits_admitted_request_with_same_identity() {
+        for mutation in [false, true] {
+            let (client, mut server) = duplex(8192);
+            let session = OSDSession::spawn(
+                raw_session(client),
+                broadcast::channel(4).0,
+                MESSAGE_TEST_LIMITS,
+                Duration::from_secs(1),
+            );
+            let pending_session = Arc::clone(&session);
+            let pending = tokio::spawn(async move {
+                pending_session
+                    .submit(
+                        backoff(BACKOFF_BLOCK).pg,
+                        &object(),
+                        request_message(),
+                        mutation,
+                        &OperationOptions::new()
+                            .with_deadline(std::time::Instant::now() + Duration::from_secs(2)),
+                    )
+                    .await
+            });
+            let original = next_message(&mut server).await;
+            let mut block = encode_for_test(&backoff(BACKOFF_BLOCK), MESSAGE_TEST_LIMITS).unwrap();
+            block.header.sequence = 1;
+            send_message(&mut server, block).await;
+            assert_eq!(
+                next_message(&mut server).await.header.message_type,
+                MESSAGE_OSD_BACKOFF
+            );
+            let mut unblock =
+                encode_for_test(&backoff(BACKOFF_UNBLOCK), MESSAGE_TEST_LIMITS).unwrap();
+            unblock.header.sequence = 2;
+            send_message(&mut server, unblock).await;
+            let resent = tokio::time::timeout(Duration::from_secs(1), next_message(&mut server))
+                .await
+                .expect("UNBLOCK must resubmit an admitted request");
+            assert_eq!(resent.header.transaction_id, original.header.transaction_id);
+            assert_eq!(resent.front, original.front);
+            send_message(
+                &mut server,
+                Message {
+                    header: MessageHeader {
+                        sequence: 3,
+                        transaction_id: resent.header.transaction_id,
+                        ..MessageHeader::default()
+                    },
+                    lengths: MessageLengths {
+                        front: 2,
+                        ..MessageLengths::default()
+                    },
+                    front: b"ok".to_vec(),
+                    ..Message::default()
+                },
+            )
+            .await;
+            assert_eq!(pending.await.unwrap().unwrap().front, b"ok");
+            assert!(
+                session
+                    .state
+                    .lock()
+                    .await
+                    .submissions
+                    .lock()
+                    .unwrap()
+                    .is_empty()
+            );
+            session.shutdown().await;
+        }
     }
 
     #[tokio::test]

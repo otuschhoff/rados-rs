@@ -1,4 +1,5 @@
 pub(crate) mod banner;
+pub(crate) mod budget;
 pub(crate) mod control;
 pub(crate) mod frame;
 pub(crate) mod message;

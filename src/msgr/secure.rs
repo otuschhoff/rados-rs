@@ -203,6 +203,15 @@ impl SecureCodec {
         reader: &mut (impl AsyncRead + Unpin),
         limits: Limits,
     ) -> Result<Frame, FrameError> {
+        self.read_reserved(reader, limits, |_, _| Ok(())).await
+    }
+
+    pub(crate) async fn read_reserved(
+        &mut self,
+        reader: &mut (impl AsyncRead + Unpin),
+        limits: Limits,
+        reserve: impl FnOnce(Tag, u64) -> Result<(), FrameError>,
+    ) -> Result<Frame, FrameError> {
         if !self.rx.available(1) {
             return Err(FrameError::CounterExhausted);
         }
@@ -218,6 +227,7 @@ impl SecureCodec {
             .map_err(|_| FrameError::Malformed)?;
         let (tag, descriptors) = decode_preamble(&preamble)?;
         let (wire_size, records) = validate_descriptors(&descriptors, limits)?;
+        reserve(tag, wire_size)?;
         if !self.rx.available(records - 1) {
             return Err(FrameError::CounterExhausted);
         }
@@ -306,6 +316,15 @@ impl SecureDecoder {
         limits: Limits,
     ) -> Result<Frame, FrameError> {
         self.0.read_async(reader, limits).await
+    }
+
+    pub(crate) async fn read_reserved(
+        &mut self,
+        reader: &mut (impl AsyncRead + Unpin),
+        limits: Limits,
+        reserve: impl FnOnce(Tag, u64) -> Result<(), FrameError>,
+    ) -> Result<Frame, FrameError> {
+        self.0.read_reserved(reader, limits, reserve).await
     }
 }
 

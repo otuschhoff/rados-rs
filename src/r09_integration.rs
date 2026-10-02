@@ -96,6 +96,7 @@ pub fn fuzz_compound(data: &[u8]) {
             front: data[front_start..middle_start].to_vec(),
             middle: data[middle_start..body_start].to_vec(),
             data: data[body_start..].to_vec(),
+            ..Message::default()
         };
         drop(decode_reply(&message, LIMITS));
     }

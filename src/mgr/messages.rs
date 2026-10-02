@@ -77,6 +77,7 @@ pub(crate) fn encode_command(
         front,
         middle: Vec::new(),
         data,
+        ..Message::default()
     })
 }
 
@@ -172,6 +173,7 @@ mod tests {
             front: encoder.finish().expect("front"),
             middle: Vec::new(),
             data: b"details".to_vec(),
+            ..Message::default()
         };
         reply.lengths.front = u32::try_from(reply.front.len()).expect("front length");
         reply.lengths.data = u32::try_from(reply.data.len()).expect("data length");

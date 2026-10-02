@@ -226,10 +226,23 @@ impl CrcCodec {
         reader: &mut (impl AsyncRead + Unpin),
         limits: Limits,
     ) -> Result<Frame, FrameError> {
+        self.read_reserved(reader, limits, |_, _| Ok(())).await
+    }
+
+    pub(crate) async fn read_reserved(
+        self,
+        reader: &mut (impl AsyncRead + Unpin),
+        limits: Limits,
+        reserve: impl FnOnce(Tag, u64) -> Result<(), FrameError>,
+    ) -> Result<Frame, FrameError> {
         let mut preamble = [0_u8; PREAMBLE_SIZE];
         read_exact_async(reader, &mut preamble).await?;
         let (tag, descriptors) = decode_preamble(&preamble)?;
-        descriptors_and_crc_size_from_descriptors(&descriptors, limits)?;
+        let wire_bytes = descriptors_and_crc_size_from_descriptors(&descriptors, limits)?;
+        reserve(
+            tag,
+            u64::try_from(wire_bytes).map_err(|_| FrameError::LimitExceeded)?,
+        )?;
 
         let mut segments = Vec::with_capacity(descriptors.len());
         for (index, descriptor) in descriptors.iter().enumerate() {

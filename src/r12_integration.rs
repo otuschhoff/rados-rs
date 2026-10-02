@@ -78,6 +78,7 @@ fn build_front_message(
         front,
         middle: Vec::new(),
         data: Vec::new(),
+        ..Message::default()
     }
 }
 
@@ -110,5 +111,6 @@ fn build_payload_message(
         front,
         middle: Vec::new(),
         data: body,
+        ..Message::default()
     }
 }
