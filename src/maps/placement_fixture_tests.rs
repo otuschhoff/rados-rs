@@ -123,7 +123,7 @@ fn osd_map(root: &Path, pg_count: u32, weights: Vec<u32>) -> OSDMap {
         pg_temp: HashMap::new(),
         primary_temp: HashMap::new(),
         primary_affinity: Vec::new(),
-        crush_data: fixture(root, "crushmap.bin"),
+        crush_data: fixture(root, "crushmap.bin").into(),
         erasure_code_profiles: HashMap::new(),
         pg_upmap: HashMap::new(),
         pg_upmap_items: HashMap::new(),

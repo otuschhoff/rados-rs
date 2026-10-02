@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -16,6 +17,24 @@ impl<T> IoStream for T where T: AsyncRead + AsyncWrite + Send + Unpin + 'static 
 pub(crate) enum Codec {
     Crc(CrcCodec),
     Secure(Box<SecureCodec>),
+}
+
+#[derive(Default)]
+pub(crate) struct ObservedModes(AtomicU8);
+
+impl ObservedModes {
+    pub(crate) fn record(&self, codec: &Codec) {
+        let mode = match codec {
+            Codec::Secure(_) => 1,
+            Codec::Crc(_) => 2,
+        };
+        self.0.fetch_or(mode, Ordering::Relaxed);
+    }
+
+    pub(crate) fn snapshot(&self) -> (bool, bool) {
+        let modes = self.0.load(Ordering::Relaxed);
+        (modes & 1 != 0, modes & 2 != 0)
+    }
 }
 
 enum Encoder {

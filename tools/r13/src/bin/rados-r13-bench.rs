@@ -137,7 +137,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let (end_user_ns, end_system_ns) = cpu_ns().unwrap_or((0, 0));
     let peak_rss = peak_rss_bytes().unwrap_or(1);
+    let observed_modes = client.observed_osd_connection_modes();
     let _ = client.shutdown(op_options()).await;
+    verify_transport(security_mode, &observed_modes)?;
 
     let run = BenchmarkRun {
         implementation: "rust",
@@ -162,6 +164,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         std::io::stdout().write_all(&bytes)?;
         std::io::stdout().write_all(b"\n")?;
+    }
+    Ok(())
+}
+
+fn verify_transport(
+    requested: SecurityMode,
+    observed: &[SecurityMode],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if observed != [requested] {
+        return Err(format!(
+            "requested {requested:?} benchmark but observed OSD modes {observed:?}; refusing mislabeled evidence"
+        )
+        .into());
     }
     Ok(())
 }
@@ -513,6 +528,22 @@ fn parse_args_from(arguments: Vec<String>) -> Result<BenchArgs, Box<dyn std::err
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn transport_evidence_rejects_fallback_mixed_and_missing_modes() {
+        assert!(verify_transport(SecurityMode::Secure, &[SecurityMode::Secure]).is_ok());
+        assert!(verify_transport(SecurityMode::Crc, &[SecurityMode::Crc]).is_ok());
+        assert!(verify_transport(SecurityMode::Crc, &[SecurityMode::Secure]).is_err());
+        assert!(verify_transport(SecurityMode::Secure, &[SecurityMode::Crc]).is_err());
+        assert!(verify_transport(SecurityMode::Secure, &[]).is_err());
+        assert!(
+            verify_transport(
+                SecurityMode::Crc,
+                &[SecurityMode::Secure, SecurityMode::Crc]
+            )
+            .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn worker_failure_drains_remaining_workers() {
         let (completed, completion) = tokio::sync::oneshot::channel();

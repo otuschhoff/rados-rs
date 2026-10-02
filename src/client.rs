@@ -238,6 +238,24 @@ impl Client {
             .and_then(|monitor| monitor.snapshot().global_id())
     }
 
+    /// Returns the actual OSD wire modes observed over this client's lifetime.
+    ///
+    /// The result includes retired connections and reconnects, not monitor modes.
+    /// An empty result means no OSD codec has been installed. Here `Crc` denotes
+    /// negotiated CRC, not merely the configuration policy allowing CRC fallback.
+    #[must_use]
+    pub fn observed_osd_connection_modes(&self) -> Vec<SecurityMode> {
+        let (secure, crc) = self.0.objecter.observed_connection_modes();
+        let mut modes = Vec::with_capacity(2);
+        if secure {
+            modes.push(SecurityMode::Secure);
+        }
+        if crc {
+            modes.push(SecurityMode::Crc);
+        }
+        modes
+    }
+
     /// Returns authenticated session addresses in canonical messenger form.
     #[must_use]
     pub fn session_addresses(&self) -> Vec<String> {

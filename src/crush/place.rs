@@ -10,6 +10,27 @@ const MAX_CERTIFIED_REPLICAS: usize = 64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PlacementError;
 
+#[derive(Debug)]
+pub(crate) struct ValidatedMap(Map);
+
+impl ValidatedMap {
+    pub(crate) fn new(map: Map) -> Result<Self, PlacementError> {
+        map.validate_graph()
+            .map_err(|_: GraphError| PlacementError)?;
+        Ok(Self(map))
+    }
+
+    pub(crate) fn place(
+        &self,
+        rule_id: u32,
+        seed: u32,
+        replicas: usize,
+        weights: &[u32],
+    ) -> Result<Vec<i32>, PlacementError> {
+        self.0.place_validated(rule_id, seed, replicas, weights)
+    }
+}
+
 struct Permutation {
     seed: u32,
     count: u32,
@@ -30,6 +51,18 @@ impl Map {
         replicas: usize,
         osd_weights: &[u32],
     ) -> Result<Vec<i32>, PlacementError> {
+        self.validate_graph()
+            .map_err(|_: GraphError| PlacementError)?;
+        self.place_validated(rule_id, seed, replicas, osd_weights)
+    }
+
+    fn place_validated(
+        &self,
+        rule_id: u32,
+        seed: u32,
+        replicas: usize,
+        osd_weights: &[u32],
+    ) -> Result<Vec<i32>, PlacementError> {
         if replicas == 0 || replicas > MAX_CERTIFIED_REPLICAS {
             return Err(PlacementError);
         }
@@ -40,8 +73,6 @@ impl Map {
             return Err(PlacementError);
         }
         self.validate_certified_rule(rule)?;
-        self.validate_graph()
-            .map_err(|_: GraphError| PlacementError)?;
         Placement {
             crush: self,
             weights: osd_weights,

@@ -7,6 +7,9 @@ use super::control::{
 use super::frame::{FrameError, Limits};
 use super::message::{MESSAGE_HEADER_SIZE, Message};
 
+pub(crate) const MAX_CONTROL_MESSAGES: usize = 16;
+pub(crate) const MAX_CONTROL_BYTES: u64 = 1 << 20;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum State {
     Disconnected,
@@ -75,6 +78,11 @@ pub(crate) enum Input {
         request_id: u64,
         message: Message,
         one_way: bool,
+    },
+    AdmitControl {
+        request_id: u64,
+        message: Message,
+        generation: u64,
     },
     Cancel {
         request_id: u64,
@@ -182,6 +190,9 @@ pub(crate) struct Snapshot {
     pub(crate) in_flight: usize,
     pub(crate) replay: usize,
     pub(crate) retained_bytes: u64,
+    pub(crate) control_generation: u64,
+    pub(crate) control_messages: usize,
+    pub(crate) control_bytes: u64,
     pub(crate) reconnect_attempts: usize,
     pub(crate) handshake_transitions: usize,
     pub(crate) dropped_events: u64,
@@ -196,6 +207,7 @@ struct Pending {
     sent: bool,
     may_have_executed: bool,
     one_way: bool,
+    control: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,6 +240,9 @@ pub(crate) struct Machine {
     replay: Vec<u64>,
     controls: VecDeque<Control>,
     retained_bytes: u64,
+    control_generation: u64,
+    control_messages: usize,
+    control_bytes: u64,
     incoming_count: usize,
     write_busy: bool,
     next_outbound: Option<u64>,
@@ -288,6 +303,9 @@ impl Machine {
             replay: Vec::new(),
             controls: VecDeque::new(),
             retained_bytes: 0,
+            control_generation: 1,
+            control_messages: 0,
+            control_bytes: 0,
             incoming_count: 0,
             write_busy: false,
             next_outbound: Some(1),
@@ -351,7 +369,33 @@ impl Machine {
                 request_id,
                 message,
                 one_way,
-            } => self.admit(request_id, message, one_way, &mut effects),
+            } => self.admit(request_id, message, one_way, false, &mut effects),
+            Input::AdmitControl {
+                request_id,
+                message,
+                generation,
+            } => {
+                if generation != self.control_generation || self.state != State::Ready {
+                    effects.push(Effect::Failed {
+                        request_id,
+                        error: SessionError::Disconnected,
+                    });
+                } else if message.header.message_type != 61
+                    || message.header.version != 1
+                    || message.header.compat_version > 1
+                    || message.front.len() < 29
+                    || message.front[28] != 2
+                    || !message.middle.is_empty()
+                    || !message.data.is_empty()
+                {
+                    effects.push(Effect::Failed {
+                        request_id,
+                        error: SessionError::UnsupportedPayload,
+                    });
+                } else {
+                    self.admit(request_id, message, true, true, &mut effects);
+                }
+            }
             Input::Cancel { request_id } => self.cancel(request_id, &mut effects),
             Input::Dispatch => self.dispatch(&mut effects),
             Input::WriteComplete {
@@ -433,6 +477,9 @@ impl Machine {
             return;
         }
         if self.renewal == RenewalState::Idle {
+            if !self.invalidate_controls(effects) {
+                return;
+            }
             self.renewal = RenewalState::Draining;
             effects.push(Effect::Event(Event::CredentialRenewal));
         } else {
@@ -454,10 +501,17 @@ impl Machine {
             server_features: self.server_features,
             global_sequence: self.global_sequence,
             connect_sequence: self.connect_sequence,
-            queued: self.pending.iter().filter(|pending| !pending.sent).count(),
+            queued: self
+                .pending
+                .iter()
+                .filter(|pending| !pending.sent && pending.control.is_none())
+                .count(),
             in_flight: self.in_flight_count(),
             replay: self.replay.len(),
             retained_bytes: self.retained_bytes,
+            control_generation: self.control_generation,
+            control_messages: self.control_messages,
+            control_bytes: self.control_bytes,
             reconnect_attempts: self.reconnect_attempts,
             handshake_transitions: self.transitions,
             dropped_events: 0,
@@ -496,6 +550,7 @@ impl Machine {
         request_id: u64,
         mut message: Message,
         one_way: bool,
+        control: bool,
         effects: &mut Vec<Effect>,
     ) {
         if let Some(error) = self.terminal_error {
@@ -516,14 +571,18 @@ impl Machine {
             });
             return;
         };
-        if self.pending.len() >= self.config.max_queued_messages
-            || bytes
-                > self
-                    .config
-                    .max_retained_bytes
-                    .saturating_sub(self.retained_bytes)
-            || self.pending(request_id).is_some()
-        {
+        let saturated = if control {
+            self.control_messages >= MAX_CONTROL_MESSAGES
+                || bytes > MAX_CONTROL_BYTES.saturating_sub(self.control_bytes)
+        } else {
+            self.pending.len() - self.control_messages >= self.config.max_queued_messages
+                || bytes
+                    > self
+                        .config
+                        .max_retained_bytes
+                        .saturating_sub(self.retained_bytes)
+        };
+        if saturated || self.pending(request_id).is_some() {
             effects.push(Effect::Failed {
                 request_id,
                 error: SessionError::QueueSaturated,
@@ -560,9 +619,15 @@ impl Machine {
             sent: false,
             may_have_executed: false,
             one_way,
+            control: control.then_some(self.control_generation),
         });
         self.by_transaction.insert(transaction_id, request_id);
-        self.retained_bytes += bytes;
+        if control {
+            self.control_messages += 1;
+            self.control_bytes += bytes;
+        } else {
+            self.retained_bytes += bytes;
+        }
         effects.push(Effect::Admitted {
             request_id,
             transaction_id,
@@ -604,19 +669,35 @@ impl Machine {
             });
             return;
         }
-        if self.state != State::Ready
-            || self.in_flight_count() >= self.config.max_in_flight_transactions
-        {
+        if self.state != State::Ready {
             return;
         }
-        if self.renewal == RenewalState::Draining {
+        if self.renewal == RenewalState::Draining && self.control_messages == 0 {
             if self.in_flight_count() == 0 {
                 self.renewal = RenewalState::Reconnecting;
                 self.fault(SessionError::Renewal, effects);
             }
             return;
         }
-        let Some(index) = self.pending.iter().position(|pending| !pending.sent) else {
+        let in_flight = self.in_flight_count();
+        let Some((index, _)) = self
+            .pending
+            .iter()
+            .enumerate()
+            .filter(|(_, pending)| {
+                !pending.sent
+                    && (pending.control.is_some()
+                        || (self.renewal != RenewalState::Draining
+                            && in_flight < self.config.max_in_flight_transactions))
+            })
+            .min_by_key(
+                |(_, pending)| match (pending.sequence, pending.control.is_some()) {
+                    (0, true) => (1, 0),
+                    (0, false) => (2, 0),
+                    (sequence, _) => (0, sequence),
+                },
+            )
+        else {
             return;
         };
         if self.pending[index].sequence == 0 {
@@ -748,7 +829,7 @@ impl Machine {
             .copied()
             .filter(|request_id| {
                 self.pending(*request_id)
-                    .is_some_and(|pending| pending.may_have_executed)
+                    .is_some_and(|pending| pending.may_have_executed && !pending.one_way)
             })
         {
             self.remove_pending(request_id);
@@ -904,6 +985,9 @@ impl Machine {
     }
 
     fn reset(&mut self, full: bool, effects: &mut Vec<Effect>) {
+        if !self.invalidate_controls(effects) {
+            return;
+        }
         effects.push(Effect::Event(Event::SessionReset { full }));
         self.server_cookie = 0;
         self.server_flags = 0;
@@ -928,6 +1012,9 @@ impl Machine {
             || self.state == State::Stopped
             || (self.state == State::Disconnected && self.connect_pending)
         {
+            return;
+        }
+        if !self.invalidate_controls(effects) {
             return;
         }
         effects.push(Effect::Event(Event::TransportFault(error)));
@@ -1028,6 +1115,34 @@ impl Machine {
         self.replay.clear();
         self.by_transaction.clear();
         self.retained_bytes = 0;
+        self.control_messages = 0;
+        self.control_bytes = 0;
+    }
+
+    fn invalidate_controls(&mut self, effects: &mut Vec<Effect>) -> bool {
+        let Some(generation) = self.control_generation.checked_add(1) else {
+            self.fail_terminal(SessionError::TransitionLimit, effects);
+            return false;
+        };
+        self.control_generation = generation;
+        let requests: Vec<_> = self
+            .pending
+            .iter()
+            .filter(|pending| pending.control.is_some())
+            .map(|pending| (pending.request_id, pending.may_have_executed))
+            .collect();
+        for (request_id, sent) in requests {
+            self.remove_pending(request_id);
+            effects.push(Effect::Failed {
+                request_id,
+                error: if sent {
+                    SessionError::OutcomeUnknown
+                } else {
+                    SessionError::Disconnected
+                },
+            });
+        }
+        true
     }
 
     fn fail_sent_unknown(&mut self, effects: &mut Vec<Effect>) {
@@ -1251,11 +1366,19 @@ impl Machine {
         self.replay.retain(|candidate| *candidate != request_id);
         self.by_transaction
             .remove(&pending.message.header.transaction_id);
-        self.retained_bytes -= pending.bytes;
+        if pending.control.is_some() {
+            self.control_messages -= 1;
+            self.control_bytes -= pending.bytes;
+        } else {
+            self.retained_bytes -= pending.bytes;
+        }
     }
 
     fn in_flight_count(&self) -> usize {
-        self.pending.iter().filter(|pending| pending.sent).count()
+        self.pending
+            .iter()
+            .filter(|pending| pending.sent && pending.control.is_none())
+            .count()
     }
 }
 
@@ -1328,6 +1451,218 @@ mod tests {
             vec![Effect::Event(Event::StateChanged(State::Ready))]
         );
         machine
+    }
+
+    fn control_message() -> Message {
+        let mut acknowledgment = message(&[0; 29]);
+        acknowledgment.header.message_type = 61;
+        acknowledgment.header.version = 1;
+        acknowledgment.front[28] = 2;
+        acknowledgment
+    }
+
+    #[test]
+    fn reserved_control_progresses_with_full_application_budgets() {
+        let mut machine = ready_machine(ReconnectPolicy::ReplayPending);
+        let application = message(b"application");
+        let bytes = machine.admission_bytes(&application).unwrap();
+        machine.config.max_queued_messages = 1;
+        machine.config.max_in_flight_transactions = 1;
+        machine.config.max_retained_bytes = bytes;
+        machine.step(Input::Admit {
+            request_id: 1,
+            message: application,
+            one_way: false,
+        });
+        let (generation, _) = dispatch_message(&mut machine, 1);
+        complete_write(&mut machine, generation, 1);
+        let scope = machine.snapshot().control_generation;
+        assert!(matches!(
+            &machine.step(Input::AdmitControl {
+                request_id: 2,
+                message: control_message(),
+                generation: scope,
+            })[..],
+            [Effect::Admitted { request_id: 2, .. }]
+        ));
+        assert_eq!(machine.snapshot().retained_bytes, bytes);
+        assert_eq!(machine.snapshot().in_flight, 1);
+        let (generation, transaction) = dispatch_message(&mut machine, 2);
+        let mut reply = message(b"not a write completion");
+        reply.header.sequence = 1;
+        reply.header.transaction_id = transaction;
+        let effects = machine.step(Input::Message {
+            generation,
+            message: reply,
+        });
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Completed { request_id: 2, .. }))
+        );
+        assert_eq!(machine.snapshot().control_messages, 1);
+        let effects = machine.step(Input::WriteComplete {
+            generation,
+            request_id: Some(2),
+            result: Ok(()),
+        });
+        assert!(effects.contains(&Effect::Completed {
+            request_id: 2,
+            reply: None
+        }));
+        assert_eq!(machine.snapshot().control_bytes, 0);
+        assert_eq!(machine.snapshot().retained_bytes, bytes);
+    }
+
+    #[test]
+    fn reserved_control_limits_payload_and_reset_scope_are_enforced() {
+        let mut machine = ready_machine(ReconnectPolicy::ReplayPending);
+        let generation = machine.snapshot().control_generation;
+        let mut invalid = control_message();
+        invalid.front[28] = 1;
+        assert_eq!(
+            machine.step(Input::AdmitControl {
+                request_id: 1,
+                message: invalid,
+                generation
+            }),
+            vec![Effect::Failed {
+                request_id: 1,
+                error: SessionError::UnsupportedPayload
+            }]
+        );
+        for request_id in 1..=MAX_CONTROL_MESSAGES as u64 {
+            assert!(matches!(
+                &machine.step(Input::AdmitControl {
+                    request_id,
+                    message: control_message(),
+                    generation
+                })[..],
+                [Effect::Admitted { .. }]
+            ));
+        }
+        assert_eq!(
+            machine.step(Input::AdmitControl {
+                request_id: 100,
+                message: control_message(),
+                generation
+            }),
+            vec![Effect::Failed {
+                request_id: 100,
+                error: SessionError::QueueSaturated
+            }]
+        );
+        let mut effects = Vec::new();
+        machine.reset(false, &mut effects);
+        assert_eq!(machine.snapshot().control_messages, 0);
+        assert_eq!(machine.snapshot().control_bytes, 0);
+        assert_ne!(machine.snapshot().control_generation, generation);
+        machine.state = State::Ready;
+        assert_eq!(
+            machine.step(Input::AdmitControl {
+                request_id: 101,
+                message: control_message(),
+                generation
+            }),
+            vec![Effect::Failed {
+                request_id: 101,
+                error: SessionError::Disconnected
+            }]
+        );
+        machine.config.limits.max_segment_bytes = 2 << 20;
+        machine.config.limits.max_frame_bytes = 4 << 20;
+        let mut oversized = message(&vec![0; usize::try_from(MAX_CONTROL_BYTES).unwrap()]);
+        oversized.header = control_message().header;
+        oversized.front[28] = 2;
+        assert_eq!(
+            machine.step(Input::AdmitControl {
+                request_id: 102,
+                message: oversized,
+                generation: machine.control_generation
+            }),
+            vec![Effect::Failed {
+                request_id: 102,
+                error: SessionError::QueueSaturated
+            }]
+        );
+    }
+
+    #[test]
+    fn reserved_control_cancellation_and_renewal_release_scoped_state() {
+        let mut machine = ready_machine(ReconnectPolicy::ReplayPending);
+        let scope = machine.control_generation;
+        machine.step(Input::AdmitControl {
+            request_id: 1,
+            message: control_message(),
+            generation: scope,
+        });
+        machine.step(Input::Cancel { request_id: 1 });
+        assert_eq!(machine.snapshot().control_bytes, 0);
+        machine.step(Input::AdmitControl {
+            request_id: 2,
+            message: control_message(),
+            generation: scope,
+        });
+        let (generation, _) = dispatch_message(&mut machine, 2);
+        let effects = machine.step(Input::RenewalDue { generation });
+        assert!(effects.contains(&Effect::Failed {
+            request_id: 2,
+            error: SessionError::OutcomeUnknown
+        }));
+        assert_ne!(machine.control_generation, scope);
+        assert_eq!(machine.snapshot().control_messages, 0);
+        machine.step(Input::AdmitControl {
+            request_id: 3,
+            message: control_message(),
+            generation: machine.control_generation,
+        });
+        let effects = machine.step(Input::WriteComplete {
+            generation,
+            request_id: Some(2),
+            result: Ok(()),
+        });
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Completed { request_id: 3, .. }))
+        );
+        assert!(machine.pending(3).is_some());
+        dispatch_message(&mut machine, 3);
+    }
+
+    #[test]
+    fn scoped_control_fault_preserves_application_replay_identity() {
+        let mut machine = ready_machine(ReconnectPolicy::ReplayPending);
+        machine.step(Input::Admit {
+            request_id: 1,
+            message: message(b"mutation"),
+            one_way: false,
+        });
+        let (generation, transaction) = dispatch_message(&mut machine, 1);
+        complete_write(&mut machine, generation, 1);
+        let sequence = machine.pending(1).unwrap().sequence;
+        let scope = machine.control_generation;
+        machine.step(Input::AdmitControl {
+            request_id: 2,
+            message: control_message(),
+            generation: scope,
+        });
+        dispatch_message(&mut machine, 2);
+        let effects = machine.step(Input::Fault {
+            generation,
+            error: SessionError::Disconnected,
+        });
+        assert!(effects.contains(&Effect::Failed {
+            request_id: 2,
+            error: SessionError::OutcomeUnknown
+        }));
+        assert!(machine.pending(2).is_none());
+        let application = machine.pending(1).unwrap();
+        assert_eq!(application.sequence, sequence);
+        assert_eq!(application.message.header.transaction_id, transaction);
+        assert!(!application.sent);
+        assert_eq!(machine.snapshot().next_outbound_sequence, 3);
+        assert_eq!(machine.snapshot().control_bytes, 0);
     }
 
     fn dispatch_message(machine: &mut Machine, request_id: u64) -> (u64, u64) {

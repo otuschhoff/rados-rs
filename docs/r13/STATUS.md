@@ -90,6 +90,20 @@ Frozen fuzz identity constants:
 
 ## Notes
 
+- Post-P12 Go improvements adapted locally: lifetime OSD codec-mode
+  observations with strict benchmark-label verification; a separate bounded
+  backoff-ACK lane (16 messages, 1 MiB) that does not consume application
+  admission budgets; and immutable, once-decoded/graph-validated CRUSH state
+  shared across clones and unchanged or equal-payload incremental updates.
+  Backoff writes have bounded deadlines and do not block incoming dispatch.
+  Fault, reset, and renewal invalidate scoped controls without changing
+  application replay sequence or transaction identity. Existing certified
+  CRUSH rule/profile checks remain in force.
+- These are local implementation improvements, not R13 certification.
+  Fresh source-bound fuzz, four-platform checks, 24-hour secure/actual-CRC
+  soak with authorized churn, and detached human approvals remain required.
+  PG-indexed backoffs, whole-map copy-on-write, aggregate receive/session
+  limits, and broader map-driven recovery have not been implemented here.
 - `rados-r13-qualify` will refuse to sign off on any report whose runtime
   observations do not match its claims. The current single-host run
   therefore cannot produce a `passed` report until every required

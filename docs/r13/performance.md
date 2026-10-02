@@ -97,6 +97,17 @@ and are byte-compared per row by the strict R13 candidate verifier.
 
 ## Honesty caveats
 
+- `SecurityMode::Crc` permits CRC fallback; it does not force CRC-only
+  negotiation. `Client::observed_osd_connection_modes()` reports modes from
+  installed OSD codecs over the client's lifetime, including reconnects.
+  An empty list means no OSD codec was installed; it is not a CRC observation.
+  The Rust benchmark refuses to emit a report unless its observed modes
+  are exactly the requested mode. Fallback, mixed-mode, and missing-mode
+  observations are errors. The frozen report schema and matrix are unchanged.
+- Older diagnostics under `failure-diagnostics/` retain their original
+  requested transport labels and provenance. CRC-labelled rows without
+  negotiated-mode observations do not establish matched Rust/native wire
+  modes and must not be promoted into certifying evidence.
 - The Rust producer honestly reports `allocations` and `allocated_bytes`
   as `null`. It cannot pretend to know allocation counters without a
   custom `GlobalAlloc`, which would require the workspace-wide forbidden

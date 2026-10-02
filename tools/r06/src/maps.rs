@@ -193,7 +193,7 @@ pub(crate) fn r06_osd_map(
         pg_temp: HashMap::new(),
         primary_temp: HashMap::new(),
         primary_affinity: Vec::new(),
-        crush_data,
+        crush_data: crush_data.into(),
         erasure_code_profiles: HashMap::new(),
         pg_upmap: HashMap::new(),
         pg_upmap_items: remaps,

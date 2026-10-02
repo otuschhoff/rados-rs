@@ -14,10 +14,13 @@ use crate::msgr::frame::Limits as FrameLimits;
 use crate::msgr::message::Message;
 use crate::msgr::session::{Config as SessionConfig, Machine, ReconnectPolicy, SessionError};
 use crate::msgr::supervisor::{Connector, Session};
+use crate::msgr::transport::ObservedModes;
 use crate::protocol::address::{EntityAddr, EntityAddrVec};
 use crate::protocol::features::GlobalFeatures;
 use crate::wire::WireError;
-use tokio::sync::{Mutex as AsyncMutex, broadcast, oneshot, watch};
+use tokio::sync::{
+    Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch,
+};
 use tokio::task::JoinHandle;
 
 use super::backoff::{
@@ -174,6 +177,14 @@ struct OSDSession {
     limits: Limits,
 }
 
+struct BackoffAck {
+    message: Message,
+    generation: u64,
+    deadline: tokio::time::Instant,
+    _slot: OwnedSemaphorePermit,
+    _bytes: OwnedSemaphorePermit,
+}
+
 pub(crate) struct Client {
     authority: Arc<RwLock<Option<Arc<MonitorConnector>>>>,
     sessions: Mutex<HashMap<i32, SessionEntry>>,
@@ -192,6 +203,7 @@ pub(crate) struct Client {
     handshake_timeout: Duration,
     allow_crc: bool,
     address_nonce: u32,
+    observed_modes: Arc<ObservedModes>,
 }
 
 impl Client {
@@ -227,7 +239,12 @@ impl Client {
             handshake_timeout,
             allow_crc,
             address_nonce,
+            observed_modes: Arc::new(ObservedModes::default()),
         }
+    }
+
+    pub(crate) fn observed_connection_modes(&self) -> (bool, bool) {
+        self.observed_modes.snapshot()
     }
 
     pub(crate) async fn read(
@@ -1234,7 +1251,12 @@ impl Client {
         })
         .map_err(map_session_error)?;
         Ok(OSDSession::spawn(
-            Arc::new(Session::spawn(machine, None, Some(connector))),
+            Arc::new(Session::spawn_observed(
+                machine,
+                None,
+                Some(connector),
+                Some(Arc::clone(&self.observed_modes)),
+            )),
             self.notifications.clone(),
             self.message_limits,
             self.handshake_timeout,
@@ -1549,7 +1571,82 @@ async fn run_incoming(
     limits: Limits,
     ack_timeout: Duration,
 ) {
-    while let Some(message) = raw.next_incoming().await {
+    let (acknowledgments, pending) = mpsc::channel(crate::msgr::session::MAX_CONTROL_MESSAGES);
+    let receive = receive_incoming(
+        Arc::clone(&raw),
+        Arc::clone(&state),
+        changed.clone(),
+        notifications.clone(),
+        limits,
+        ack_timeout,
+        acknowledgments,
+    );
+    let send = send_backoff_acks(Arc::clone(&raw), pending);
+    tokio::select! { () = receive => {}, () = send => {} }
+    fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
+}
+
+async fn send_backoff_acks(raw: Arc<Session>, mut pending: mpsc::Receiver<BackoffAck>) {
+    let mut controls = raw.control_changes();
+    while let Some(ack) = pending.recv().await {
+        if controls.borrow_and_update().control_generation != ack.generation {
+            continue;
+        }
+        let sent = tokio::time::timeout_at(ack.deadline, async {
+            let mut request = raw.admit_control(ack.message, ack.generation).await?;
+            request.cancel_on_drop();
+            request.result().await.map(|_| ())
+        });
+        tokio::pin!(sent);
+        let sent = loop {
+            tokio::select! {
+                result = &mut sent => break result.unwrap_or(Err(SessionError::Disconnected)),
+                update = controls.changed() => {
+                    if update.is_err() { return; }
+                    if controls.borrow_and_update().control_generation != ack.generation {
+                        break Ok(());
+                    }
+                }
+            }
+        };
+        if sent.is_err() {
+            match raw.snapshot().await {
+                Ok(snapshot) if snapshot.control_generation != ack.generation => {}
+                _ => return,
+            }
+        }
+    }
+}
+
+async fn receive_incoming(
+    raw: Arc<Session>,
+    state: Arc<AsyncMutex<OSDSessionState>>,
+    changed: watch::Sender<u64>,
+    notifications: broadcast::Sender<Notification>,
+    limits: Limits,
+    ack_timeout: Duration,
+    acknowledgments: mpsc::Sender<BackoffAck>,
+) {
+    let slots = Arc::new(Semaphore::new(crate::msgr::session::MAX_CONTROL_MESSAGES));
+    let bytes = Arc::new(Semaphore::new(
+        usize::try_from(crate::msgr::session::MAX_CONTROL_BYTES)
+            .expect("control reserve fits usize"),
+    ));
+    let mut controls = raw.control_changes();
+    let mut generation = controls.borrow_and_update().control_generation;
+    loop {
+        let incoming = tokio::select! {
+            update = controls.changed() => {
+                if update.is_err() { return; }
+                let current = controls.borrow_and_update().control_generation;
+                sync_backoff_generation(current, &mut generation, &state, &changed).await;
+                continue;
+            }
+            incoming = raw.next_incoming_scoped() => incoming,
+        };
+        let Some((message, message_generation)) = incoming else {
+            break;
+        };
         if message.header.message_type == 41 {
             fail_session(&raw, &state, &changed, &notifications, Error::StaleMap).await;
             return;
@@ -1570,6 +1667,11 @@ async fn run_incoming(
             continue;
         }
         if message.header.message_type != MESSAGE_OSD_BACKOFF {
+            continue;
+        }
+        let current = controls.borrow().control_generation;
+        sync_backoff_generation(current, &mut generation, &state, &changed).await;
+        if message_generation != current {
             continue;
         }
         let Ok(backoff) = decode_backoff(&message, limits) else {
@@ -1609,21 +1711,57 @@ async fn run_incoming(
                 .await;
                 return;
             };
-            let sent = tokio::time::timeout(ack_timeout, async {
-                match raw.admit(acknowledgment, true).await {
-                    Ok(request) => request.result().await.map(|_| ()),
-                    Err(error) => Err(error),
-                }
-            })
-            .await
-            .unwrap_or(Err(SessionError::Disconnected));
-            if sent.is_err() {
-                fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
+            if queue_backoff_ack(
+                &acknowledgments,
+                acknowledgment,
+                message_generation,
+                ack_timeout,
+                &slots,
+                &bytes,
+            )
+            .is_none()
+            {
                 return;
             }
         }
     }
-    fail_session(&raw, &state, &changed, &notifications, Error::NotConnected).await;
+}
+
+async fn sync_backoff_generation(
+    observed: u64,
+    generation: &mut u64,
+    state: &AsyncMutex<OSDSessionState>,
+    changed: &watch::Sender<u64>,
+) {
+    if observed != *generation {
+        *generation = observed;
+        state.lock().await.backoffs.clear();
+        changed.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+}
+
+fn queue_backoff_ack(
+    pending: &mpsc::Sender<BackoffAck>,
+    message: Message,
+    generation: u64,
+    timeout: Duration,
+    slots: &Arc<Semaphore>,
+    bytes: &Arc<Semaphore>,
+) -> Option<()> {
+    let retained =
+        u32::try_from(crate::msgr::message::MESSAGE_HEADER_SIZE + message.front.len()).ok()?;
+    let slot = Arc::clone(slots).try_acquire_owned().ok()?;
+    let bytes = Arc::clone(bytes).try_acquire_many_owned(retained).ok()?;
+    let deadline = tokio::time::Instant::now().checked_add(timeout)?;
+    pending
+        .try_send(BackoffAck {
+            message,
+            generation,
+            deadline,
+            _slot: slot,
+            _bytes: bytes,
+        })
+        .ok()
 }
 
 async fn fail_session(
@@ -3088,6 +3226,47 @@ mod tests {
             pending.await.expect("submit task").expect("reply").front,
             b"ok"
         );
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn backoff_unblock_is_processed_while_ack_write_is_stalled() {
+        let (client, mut server) = duplex(64);
+        let session = OSDSession::spawn(
+            raw_session(client),
+            broadcast::channel(4).0,
+            MESSAGE_TEST_LIMITS,
+            Duration::from_secs(2),
+        );
+        let mut block = encode_for_test(&backoff(BACKOFF_BLOCK), MESSAGE_TEST_LIMITS).unwrap();
+        block.header.sequence = 1;
+        send_message(&mut server, block).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !session.state.lock().await.backoffs.is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("block registered");
+        let mut unblock = encode_for_test(&backoff(BACKOFF_UNBLOCK), MESSAGE_TEST_LIMITS).unwrap();
+        unblock.header.sequence = 2;
+        send_message(&mut server, unblock).await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let state = session.state.lock().await;
+                assert_eq!(state.failure, None);
+                if state.backoffs.is_empty() {
+                    break;
+                }
+                drop(state);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("unblock does not wait for ACK write");
         session.shutdown().await;
     }
 

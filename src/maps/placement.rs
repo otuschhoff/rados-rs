@@ -175,13 +175,18 @@ impl OSDMap {
         Ok(placement)
     }
 
-    fn decode_crush_map(&self) -> Result<crate::crush::Map> {
-        let max_bytes = u32::try_from(self.crush_data.len())
+    fn decode_crush_map(&self) -> Result<&crate::crush::ValidatedMap> {
+        self.crush_data.decoded(|| self.decode_crush_payload())
+    }
+
+    fn decode_crush_payload(&self) -> Result<crate::crush::ValidatedMap> {
+        let payload = self.crush_data.bytes();
+        let max_bytes = u32::try_from(payload.len())
             .map_err(|_| MapError::UnsupportedPlacement("CRUSH map exceeds supported size"))?;
-        let structural_limit = u32::try_from((self.crush_data.len() / 4).max(1))
+        let structural_limit = u32::try_from((payload.len() / 4).max(1))
             .map_err(|_| MapError::UnsupportedPlacement("CRUSH map exceeds supported size"))?;
         crate::crush::Map::decode(
-            &self.crush_data,
+            payload,
             DecodeLimits {
                 max_bytes,
                 max_buckets: structural_limit,
@@ -193,6 +198,10 @@ impl OSDMap {
         .map_err(|error| match error {
             DecodeError::Wire(_) => MapError::UnsupportedPlacement("invalid CRUSH map"),
             DecodeError::Unsupported => MapError::UnsupportedPlacement("unsupported CRUSH map"),
+        })
+        .and_then(|map| {
+            crate::crush::ValidatedMap::new(map)
+                .map_err(|PlacementError| MapError::UnsupportedPlacement("invalid CRUSH placement"))
         })
     }
 
@@ -462,7 +471,7 @@ mod tests {
             pg_temp: HashMap::new(),
             primary_temp: HashMap::new(),
             primary_affinity: Vec::new(),
-            crush_data,
+            crush_data: crush_data.into(),
             erasure_code_profiles: HashMap::new(),
             pg_upmap: HashMap::new(),
             pg_upmap_items: HashMap::new(),
@@ -551,6 +560,76 @@ mod tests {
         encoder.u32(100);
         encoder.u32(100);
         encoder.finish().expect("encode CRUSH")
+    }
+
+    #[test]
+    fn immutable_crush_cache_reuses_cold_concurrent_and_warm_placement() {
+        let map = test_osd_map(
+            test_pool(2, POOL_TYPE_REPLICATED, 2),
+            vec![3; 4],
+            vec![0x1_0000; 4],
+            encode_placement_crush_map(4),
+        );
+        std::thread::scope(|scope| {
+            let tasks: Vec<_> = (0..8_u32)
+                .map(|seed| {
+                    let map = &map;
+                    scope.spawn(move || {
+                        (
+                            map.decode_crush_map().unwrap(),
+                            map.place_raw_hash(2, seed).unwrap(),
+                        )
+                    })
+                })
+                .collect();
+            for task in tasks {
+                let (decoded, placed) = task.join().unwrap();
+                assert!(std::ptr::eq(decoded, map.decode_crush_map().unwrap()));
+                assert_eq!(placed, map.place_raw_hash(2, placed.raw_hash).unwrap());
+            }
+        });
+        let mut clone = map.clone();
+        clone.crush_data.replace(map.crush_data());
+        assert!(std::ptr::eq(
+            map.decode_crush_map().unwrap(),
+            clone.decode_crush_map().unwrap()
+        ));
+        let mut cold = map.clone();
+        cold.crush_data = map.crush_data().to_vec().into();
+        assert_eq!(cold, map);
+        assert!(!std::ptr::eq(
+            map.decode_crush_map().unwrap(),
+            cold.decode_crush_map().unwrap()
+        ));
+        assert_eq!(cold, map);
+        let mut placement = clone.place_raw_hash(2, 9).unwrap();
+        placement.raw[0] = -99;
+        assert_ne!(placement.raw, clone.place_raw_hash(2, 9).unwrap().raw);
+        clone.crush_data.replace(&encode_placement_crush_map(5));
+        assert!(!std::ptr::eq(
+            map.decode_crush_map().unwrap(),
+            clone.decode_crush_map().unwrap()
+        ));
+        assert_eq!(map.place_raw_hash(2, 9), clone.place_raw_hash(2, 9));
+    }
+
+    #[test]
+    fn immutable_crush_cache_memoizes_errors_and_recovers_on_replacement() {
+        let mut map = test_osd_map(
+            test_pool(2, POOL_TYPE_REPLICATED, 2),
+            vec![3; 4],
+            vec![0x1_0000; 4],
+            Vec::new(),
+        );
+        let error = map.decode_crush_map().unwrap_err();
+        assert_eq!(
+            map.crush_data
+                .decoded(|| panic!("decode error must be cached"))
+                .unwrap_err(),
+            error
+        );
+        map.crush_data.replace(&encode_placement_crush_map(4));
+        assert!(map.place_raw_hash(2, 9).is_ok());
     }
 
     fn encode_p00_crush_map() -> Vec<u8> {
@@ -868,7 +947,7 @@ mod tests {
             pg_temp: HashMap::new(),
             primary_temp: HashMap::new(),
             primary_affinity: Vec::new(),
-            crush_data: Vec::new(),
+            crush_data: Vec::new().into(),
             erasure_code_profiles: HashMap::new(),
             pg_upmap: HashMap::from([(
                 PG {
@@ -930,7 +1009,7 @@ mod tests {
             pg_temp: HashMap::new(),
             primary_temp: HashMap::new(),
             primary_affinity: Vec::new(),
-            crush_data: Vec::new(),
+            crush_data: Vec::new().into(),
             erasure_code_profiles: HashMap::new(),
             pg_upmap: HashMap::new(),
             pg_upmap_items: HashMap::from([(

@@ -252,7 +252,7 @@ pub(crate) fn apply_osdmap_incremental(
         resize_osds(&mut next, new_max_osd);
     }
     if !incremental.crush_data.is_empty() {
-        next.crush_data.clone_from(&incremental.crush_data);
+        next.crush_data.replace(&incremental.crush_data);
         next.crush_version = next
             .crush_version
             .checked_add(1)

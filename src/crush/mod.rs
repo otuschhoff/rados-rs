@@ -17,4 +17,4 @@ pub(crate) use map::{
     RULE_TYPE_REPLICATED, Rule, RuleStep,
 };
 #[allow(unused_imports)]
-pub(crate) use place::PlacementError;
+pub(crate) use place::{PlacementError, ValidatedMap};

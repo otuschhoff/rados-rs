@@ -10,8 +10,9 @@ use tokio::task::{JoinHandle, JoinSet};
 
 use super::control::Control;
 use super::message::{MESSAGE_HEADER_SIZE, Message};
+use super::session::MAX_CONTROL_MESSAGES;
 use super::session::{Effect, Event as SessionEvent, Input, Machine, SessionError, Snapshot};
-use super::transport::{Codec, Connection, Event as TransportEvent, IoStream};
+use super::transport::{Codec, Connection, Event as TransportEvent, IoStream, ObservedModes};
 
 pub(crate) struct ConnectionSetup {
     pub(crate) stream: Box<dyn IoStream>,
@@ -31,6 +32,7 @@ enum Command {
         request_id: u64,
         message: Message,
         one_way: bool,
+        control_generation: Option<u64>,
         admitted: oneshot::Sender<Result<u64, SessionError>>,
         result: oneshot::Sender<Result<Option<Message>, SessionError>>,
     },
@@ -56,8 +58,9 @@ struct ConnectResult {
 
 pub(crate) struct Session {
     commands: mpsc::Sender<Command>,
+    control_commands: mpsc::Sender<Command>,
     events: Mutex<mpsc::Receiver<SessionEvent>>,
-    incoming: Mutex<mpsc::Receiver<Message>>,
+    incoming: Mutex<mpsc::Receiver<(Message, u64)>>,
     terminal: watch::Receiver<Option<SessionError>>,
     stop: watch::Sender<bool>,
     capacity: watch::Receiver<Snapshot>,
@@ -94,10 +97,20 @@ impl Session {
         initial: Option<ConnectionSetup>,
         connector: Option<Connector>,
     ) -> Self {
+        Self::spawn_observed(machine, initial, connector, None)
+    }
+
+    pub(crate) fn spawn_observed(
+        machine: Machine,
+        initial: Option<ConnectionSetup>,
+        connector: Option<Connector>,
+        observed_modes: Option<Arc<ObservedModes>>,
+    ) -> Self {
         let capacity = machine.queue_limit();
         let retained_limit = machine.retained_limit();
         let (capacity_tx, capacity_rx) = watch::channel(machine.snapshot());
         let (commands, command_rx) = mpsc::channel(capacity);
+        let (control_commands, control_rx) = mpsc::channel(MAX_CONTROL_MESSAGES);
         let (events_tx, events) = mpsc::channel(capacity);
         let (incoming_tx, incoming) = mpsc::channel(capacity);
         let (terminal_tx, terminal) = watch::channel(None);
@@ -108,15 +121,18 @@ impl Session {
             connector,
             OwnerChannels {
                 commands: command_rx,
+                control_commands: control_rx,
                 events: events_tx,
                 incoming: incoming_tx,
                 terminal: terminal_tx,
                 stop: stop_rx,
                 capacity: capacity_tx,
             },
+            observed_modes,
         ));
         Self {
             commands,
+            control_commands,
             events: Mutex::new(events),
             incoming: Mutex::new(incoming),
             terminal,
@@ -176,6 +192,23 @@ impl Session {
         message: Message,
         one_way: bool,
     ) -> Result<Request, SessionError> {
+        self.admit_kind(message, one_way, None).await
+    }
+
+    pub(crate) async fn admit_control(
+        &self,
+        message: Message,
+        generation: u64,
+    ) -> Result<Request, SessionError> {
+        self.admit_kind(message, true, Some(generation)).await
+    }
+
+    async fn admit_kind(
+        &self,
+        message: Message,
+        one_way: bool,
+        control_generation: Option<u64>,
+    ) -> Result<Request, SessionError> {
         let request_id = self
             .next_request_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -184,11 +217,17 @@ impl Session {
             .map_err(|_| SessionError::TransitionLimit)?;
         let (admitted_tx, admitted_rx) = oneshot::channel();
         let (result_tx, result) = oneshot::channel();
-        self.commands
+        let commands = if control_generation.is_some() {
+            &self.control_commands
+        } else {
+            &self.commands
+        };
+        commands
             .try_send(Command::Admit {
                 request_id,
                 message,
                 one_way,
+                control_generation,
                 admitted: admitted_tx,
                 result: result_tx,
             })
@@ -198,7 +237,7 @@ impl Session {
             })?;
         let mut guard = AdmissionGuard {
             request_id,
-            commands: self.commands.clone(),
+            commands: commands.clone(),
             armed: true,
         };
         let transaction_id = admitted_rx.await.map_err(|_| SessionError::Closed)??;
@@ -206,7 +245,7 @@ impl Session {
         Ok(Request {
             id: request_id,
             transaction_id,
-            commands: self.commands.clone(),
+            commands: commands.clone(),
             result: Some(result),
             cancel_on_drop: false,
         })
@@ -233,6 +272,16 @@ impl Session {
     }
 
     pub(crate) async fn next_incoming(&self) -> Option<Message> {
+        self.next_incoming_scoped()
+            .await
+            .map(|(message, _)| message)
+    }
+
+    pub(crate) fn control_changes(&self) -> watch::Receiver<Snapshot> {
+        self.capacity.clone()
+    }
+
+    pub(crate) async fn next_incoming_scoped(&self) -> Option<(Message, u64)> {
         let message = self.incoming.lock().await.recv().await;
         if message.is_some() {
             let command = Command::ConsumeIncoming;
@@ -510,6 +559,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reserved_control_admission_bypasses_full_application_commands() {
+        let (client, _server) = duplex(1);
+        let session = Session::spawn(machine(1), Some(setup(client)), None);
+        let _application = session.admit(message(b"application"), false).await.unwrap();
+        let scope = session.snapshot().await.unwrap().control_generation;
+        let capacity = session.commands.capacity();
+        assert!(capacity > 0);
+        for _ in 0..capacity {
+            let (sender, _receiver) = oneshot::channel();
+            session
+                .commands
+                .try_send(Command::Snapshot { result: sender })
+                .unwrap();
+        }
+        assert_eq!(session.commands.capacity(), 0);
+        let mut acknowledgment = message(&[0; 29]);
+        acknowledgment.header.message_type = 61;
+        acknowledgment.header.version = 1;
+        acknowledgment.front[28] = 2;
+        let _control = tokio::time::timeout(
+            Duration::from_secs(1),
+            session.admit_control(acknowledgment, scope),
+        )
+        .await
+        .expect("independent control command lane")
+        .unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn capacity_wait_resumes_after_cancellation_without_admitting() {
         let (client, _server) = duplex(1);
         let session = Session::spawn(machine(1), Some(setup(client)), None);
@@ -762,6 +841,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observed_modes_survive_session_shutdown() {
+        let observed = Arc::new(ObservedModes::default());
+        assert_eq!(observed.snapshot(), (false, false));
+        let (client, _server) = duplex(256);
+        let session = Session::spawn_observed(
+            machine(4),
+            Some(setup(client)),
+            None,
+            Some(Arc::clone(&observed)),
+        );
+        session.snapshot().await.expect("owner installed codec");
+        assert_eq!(observed.snapshot(), (false, true));
+        session.shutdown().await;
+        assert_eq!(observed.snapshot(), (false, true));
+    }
+
+    #[tokio::test]
     async fn event_overflow_is_reported_cumulatively() {
         let (events, mut event_rx) = mpsc::channel(1);
         let (incoming, _) = mpsc::channel(1);
@@ -783,6 +879,7 @@ mod tests {
             connectors: JoinSet::new(),
             dropped_events: 0,
             unreported_dropped_events: 0,
+            observed_modes: None,
         };
 
         owner.emit_event(SessionEvent::KeepaliveAck);
@@ -829,6 +926,7 @@ mod tests {
         let (connect_results, _) = mpsc::channel(4);
         let (terminal, _) = watch::channel(None);
         let (connector_stop, _) = watch::channel(false);
+        let observed = Arc::new(ObservedModes::default());
         let mut owner = Owner {
             machine,
             connector: None,
@@ -843,6 +941,7 @@ mod tests {
             connectors: JoinSet::new(),
             dropped_events: 0,
             unreported_dropped_events: 0,
+            observed_modes: Some(Arc::clone(&observed)),
         };
         let before = owner.machine.snapshot();
         owner
@@ -868,6 +967,7 @@ mod tests {
             })
             .await;
         assert!(owner.connection.is_none());
+        assert_eq!(observed.snapshot(), (false, false));
         assert_eq!(owner.machine.snapshot().generation, 1);
         let mut byte = [0];
         assert_eq!(server.read(&mut byte).await.expect("stale peer closes"), 0);
@@ -892,7 +992,7 @@ struct Owner {
     connection: Option<(u64, Connection)>,
     responses: HashMap<u64, Response>,
     events: mpsc::Sender<SessionEvent>,
-    incoming: mpsc::Sender<Message>,
+    incoming: mpsc::Sender<(Message, u64)>,
     transport_events: mpsc::Sender<TransportEvent>,
     connect_results: mpsc::Sender<ConnectResult>,
     terminal: watch::Sender<Option<SessionError>>,
@@ -900,12 +1000,14 @@ struct Owner {
     connectors: JoinSet<()>,
     dropped_events: u64,
     unreported_dropped_events: u64,
+    observed_modes: Option<Arc<ObservedModes>>,
 }
 
 struct OwnerChannels {
     commands: mpsc::Receiver<Command>,
+    control_commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<SessionEvent>,
-    incoming: mpsc::Sender<Message>,
+    incoming: mpsc::Sender<(Message, u64)>,
     terminal: watch::Sender<Option<SessionError>>,
     stop: watch::Receiver<bool>,
     capacity: watch::Sender<Snapshot>,
@@ -916,9 +1018,11 @@ async fn run_owner(
     initial: Option<ConnectionSetup>,
     connector: Option<Connector>,
     channels: OwnerChannels,
+    observed_modes: Option<Arc<ObservedModes>>,
 ) {
     let OwnerChannels {
         mut commands,
+        mut control_commands,
         events,
         incoming,
         terminal,
@@ -943,6 +1047,7 @@ async fn run_owner(
         connectors: JoinSet::new(),
         dropped_events: 0,
         unreported_dropped_events: 0,
+        observed_modes,
     };
 
     if let Some(setup) = initial {
@@ -984,6 +1089,7 @@ async fn run_owner(
                 };
                 owner.command(command).await;
             }
+            Some(command) = control_commands.recv() => owner.command(command).await,
             event = transport_rx.recv() => {
                 if let Some(event) = event {
                     owner.transport_event(event).await;
@@ -1023,6 +1129,7 @@ impl Owner {
                 request_id,
                 message,
                 one_way,
+                control_generation,
                 admitted,
                 result,
             } => {
@@ -1033,12 +1140,20 @@ impl Owner {
                         result,
                     },
                 );
-                self.drive(Input::Admit {
-                    request_id,
-                    message,
-                    one_way,
-                })
-                .await;
+                let input = if let Some(generation) = control_generation {
+                    Input::AdmitControl {
+                        request_id,
+                        message,
+                        generation,
+                    }
+                } else {
+                    Input::Admit {
+                        request_id,
+                        message,
+                        one_way,
+                    }
+                };
+                self.drive(input).await;
             }
             Command::Cancel { request_id } => {
                 self.drive(Input::Cancel { request_id }).await;
@@ -1125,6 +1240,9 @@ impl Owner {
     }
 
     fn install(&mut self, generation: u64, setup: ConnectionSetup) {
+        if let Some(observed) = &self.observed_modes {
+            observed.record(&setup.codec);
+        }
         self.connection = Some((
             generation,
             Connection::spawn(
@@ -1224,7 +1342,11 @@ impl Owner {
                     }
                 }
                 Effect::Incoming(message) => {
-                    if self.incoming.try_send(message).is_err() {
+                    if self
+                        .incoming
+                        .try_send((message, self.machine.snapshot().control_generation))
+                        .is_err()
+                    {
                         pending.extend(self.machine.step(Input::Fault {
                             generation: self.machine.snapshot().generation,
                             error: SessionError::QueueSaturated,

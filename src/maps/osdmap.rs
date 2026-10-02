@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use crate::protocol::address::EntityAddrVec;
 use crate::wire::{Decoder, WireError, crc32c};
@@ -7,6 +8,53 @@ use super::pool::{decode_intervals, decode_nested_string_map, decode_pool};
 use super::{Fsid, Limits, MapError, Pool, Result, UTime, bounded_count, decode_utime};
 
 const OSDMAP_FLAG_SORT_BITWISE: u32 = 1 << 15;
+
+#[derive(Debug)]
+struct CrushState {
+    bytes: Vec<u8>,
+    decoded: OnceLock<Result<crate::crush::ValidatedMap>>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CrushData(Arc<CrushState>);
+
+impl From<Vec<u8>> for CrushData {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(CrushState {
+            bytes,
+            decoded: OnceLock::new(),
+        }))
+    }
+}
+
+impl PartialEq for CrushData {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+    }
+}
+
+impl CrushData {
+    pub(super) fn bytes(&self) -> &[u8] {
+        &self.0.bytes
+    }
+
+    pub(super) fn decoded(
+        &self,
+        decode: impl FnOnce() -> Result<crate::crush::ValidatedMap>,
+    ) -> Result<&crate::crush::ValidatedMap> {
+        self.0
+            .decoded
+            .get_or_init(decode)
+            .as_ref()
+            .map_err(|error| *error)
+    }
+
+    pub(super) fn replace(&mut self, bytes: &[u8]) {
+        if self.bytes() != bytes {
+            *self = bytes.to_vec().into();
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PG {
@@ -42,7 +90,7 @@ pub(crate) struct OSDMap {
     pub(super) pg_temp: HashMap<PG, Vec<i32>>,
     pub(super) primary_temp: HashMap<PG, i32>,
     pub(super) primary_affinity: Vec<u32>,
-    pub(super) crush_data: Vec<u8>,
+    pub(super) crush_data: CrushData,
     pub(super) erasure_code_profiles: HashMap<String, HashMap<String, String>>,
     pub(super) pg_upmap: HashMap<PG, Vec<i32>>,
     pub(super) pg_upmap_items: HashMap<PG, Vec<OSDRemap>>,
@@ -83,7 +131,7 @@ impl OSDMap {
             .filter(|a| !a.0.is_empty())
     }
     pub(crate) fn crush_data(&self) -> &[u8] {
-        &self.crush_data
+        self.crush_data.bytes()
     }
     pub(crate) fn sort_bitwise(&self) -> bool {
         self.flags & OSDMAP_FLAG_SORT_BITWISE != 0
@@ -142,7 +190,7 @@ pub(crate) fn r06_osd_map(
         pg_temp: HashMap::new(),
         primary_temp: HashMap::new(),
         primary_affinity: Vec::new(),
-        crush_data,
+        crush_data: crush_data.into(),
         erasure_code_profiles: HashMap::new(),
         pg_upmap: HashMap::new(),
         pg_upmap_items,
@@ -301,7 +349,7 @@ fn decode_client(decoder: &mut Decoder<'_>, limits: Limits) -> Result<OSDMap> {
         pg_temp,
         primary_temp,
         primary_affinity,
-        crush_data,
+        crush_data: crush_data.into(),
         erasure_code_profiles,
         pg_upmap,
         pg_upmap_items,
